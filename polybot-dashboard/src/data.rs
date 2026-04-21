@@ -39,6 +39,7 @@ pub struct PositionData {
     pub market_id: String,
     pub side: String,
     pub average_price: String,
+    pub current_price: Option<String>,
     pub current_size: String,
     pub category: String,
     pub status: String,

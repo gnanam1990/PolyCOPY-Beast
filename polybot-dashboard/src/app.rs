@@ -563,6 +563,7 @@ fn PositionsTable(data: Signal<Vec<PositionData>>) -> impl IntoView {
                                     <th>"Market"</th>
                                     <th>"Side"</th>
                                     <th>"Avg Price"</th>
+                                    <th>"Current Price"</th>
                                     <th>"Size"</th>
                                     <th>"Category"</th>
                                     <th>"Status"</th>
@@ -596,6 +597,7 @@ fn PositionsTable(data: Signal<Vec<PositionData>>) -> impl IntoView {
                                             </td>
                                             <td>{side_tag}</td>
                                             <td class="td-mono">{p.average_price}</td>
+                                            <td class="td-mono">{p.current_price.unwrap_or_else(|| "-".into())}</td>
                                             <td class="td-mono">{p.current_size}</td>
                                             <td>{cat_tag}</td>
                                             <td>{status_tag}</td>

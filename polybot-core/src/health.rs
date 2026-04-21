@@ -13,7 +13,6 @@ use std::time::SystemTime;
 use crate::risk::RiskEngine;
 use crate::metrics::Metrics;
 use crate::state::{self, positions::PositionManager, sqlite::{RecentTradeRow, SignalLogEntry, SqliteStore}};
-use polybot_common::types::Position;
 use rust_decimal::Decimal;
 use tokio::sync::{broadcast, Mutex};
 
@@ -211,12 +210,39 @@ pub async fn metrics_handler(State(state): State<Arc<HealthState>>) -> String {
     )
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PositionResponse {
+    pub id: String,
+    pub market_id: String,
+    pub side: String,
+    pub entry_price: String,
+    pub average_price: String,
+    pub current_size: String,
+    pub current_price: Option<String>,
+    pub opened_at: String,
+    pub status: String,
+    pub category: String,
+}
+
 pub async fn positions_handler(
     State(state): State<Arc<HealthState>>,
-) -> Json<Vec<Position>> {
+) -> Json<Vec<PositionResponse>> {
     match SqliteStore::open(std::path::Path::new(&state.sqlite_path)) {
         Ok(store) => match store.list_open_positions() {
-            Ok(rows) if !rows.is_empty() => Json(rows.into_iter().map(|row| row.position).collect()),
+            Ok(rows) if !rows.is_empty() => Json(
+                rows.into_iter().map(|row| PositionResponse {
+                    id: row.position.id,
+                    market_id: row.position.market_id,
+                    side: format!("{:?}", row.position.side),
+                    entry_price: row.position.entry_price.to_string(),
+                    average_price: row.position.average_price.to_string(),
+                    current_size: row.position.current_size.to_string(),
+                    current_price: row.current_price.map(|v| v.to_string()),
+                    opened_at: row.position.opened_at.to_rfc3339(),
+                    status: format!("{:?}", row.position.status),
+                    category: row.position.category.to_string(),
+                }).collect()
+            ),
             _ => Json(Vec::new()),
         },
         Err(_) => Json(Vec::new()),
