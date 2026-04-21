@@ -290,6 +290,7 @@ fn DashboardTab(
                 <div class="health-grid">
                     {move || {
                         let h = health.get();
+                        let sim = h.as_ref().map(|v| v.simulation).unwrap_or(false);
                         let ws = h.as_ref().map(|v| v.ws_connected).unwrap_or(false);
                         let rpc = h.as_ref().map(|v| v.rpc_status.clone()).unwrap_or_default();
                         let last = h.as_ref().and_then(|v| v.last_signal_at.clone()).unwrap_or_else(|| "Never".into());
@@ -300,7 +301,9 @@ fn DashboardTab(
                             <div class="health-item">
                                 <span class="health-label">"CLOB WebSocket"</span>
                                 <span class="health-value">
-                                    {if ws {
+                                    {if sim {
+                                        view! { <span class="pulse-dot" style="color: var(--success)"></span> <span style="color: var(--success)">"Simulation"</span> }.into_any()
+                                    } else if ws {
                                         view! { <span class="pulse-dot" style="color: var(--success)"></span> <span style="color: var(--success)">"Connected"</span> }.into_any()
                                     } else {
                                         view! { <span class="pulse-dot" style="color: var(--danger)"></span> <span style="color: var(--danger)">"Disconnected"</span> }.into_any()
@@ -309,7 +312,7 @@ fn DashboardTab(
                             </div>
                             <div class="health-item">
                                 <span class="health-label">"RPC Status"</span>
-                                <span class="health-value" style={if rpc == "healthy" { "color: var(--success)" } else { "color: var(--danger)" }}>{rpc.clone()}</span>
+                                <span class="health-value" style={if sim || rpc == "healthy" { "color: var(--success)" } else { "color: var(--danger)" }}>{if sim { "Simulation".to_string() } else { rpc.clone() }}</span>
                             </div>
                             <div class="health-item">
                                 <span class="health-label">"Data API Latency"</span>
