@@ -106,6 +106,28 @@ pub enum ExecutionMode {
     Live,
 }
 
+impl ExecutionMode {
+    pub fn allows_network_market_data(self) -> bool {
+        !matches!(self, ExecutionMode::Simulation)
+    }
+
+    pub fn allows_ws_market_data(self) -> bool {
+        !matches!(self, ExecutionMode::Simulation)
+    }
+
+    pub fn allows_live_order_submission(self) -> bool {
+        matches!(self, ExecutionMode::Live)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExecutionMode::Simulation => "simulation",
+            ExecutionMode::Shadow => "shadow",
+            ExecutionMode::Live => "live",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SignalSource {

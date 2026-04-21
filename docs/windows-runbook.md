@@ -4,7 +4,6 @@
 
 - Windows PowerShell
 - Rust toolchain installed (`rustup`, `cargo`)
-- Redis running locally or reachable via `POLYBOT_REDIS_URL`
 - A `config.toml` file in the repo root
 
 ## 2. Minimal `.env` for simulation boot
@@ -13,8 +12,10 @@ Create a `.env` file in the repo root with:
 
 ```env
 POLYBOT_SIMULATION=true
+POLYBOT_EXECUTION_MODE=simulation
 POLYBOT_LOG_LEVEL=info
 POLYBOT_SQLITE_PATH=./polybot.db
+POLYBOT_REDIS_ENABLED=false
 POLYBOT_REDIS_URL=redis://127.0.0.1:6379
 ```
 
@@ -88,3 +89,5 @@ On successful live/shadow authentication, derived CLOB credentials are stored at
 ```
 
 That path is gitignored and can be overridden with `POLYBOT_CLOB_CREDENTIALS_PATH`.
+
+Redis is optional in v3. Leave `POLYBOT_REDIS_ENABLED=false` for the default Windows-native SQLite-first path unless you intentionally want the extra Redis-backed integrations.

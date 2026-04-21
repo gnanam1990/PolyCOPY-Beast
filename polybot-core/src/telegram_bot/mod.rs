@@ -48,7 +48,7 @@ fn parse_wallet_args(s: String) -> Result<(String, Option<String>), ParseError> 
 }
 
 #[derive(BotCommands, Clone, Debug, PartialEq)]
-#[command(rename_rule = "lowercase", description = "PolyBot v2.5 commands", parse_with = "split")]
+#[command(rename_rule = "lowercase", description = "PolyBot v3 commands", parse_with = "split")]
 pub enum Command {
     #[command(description = "Show system status")]
     Status,
@@ -68,7 +68,7 @@ pub enum Command {
     Report(Option<String>),
     #[command(description = "Manage followed wallets: /wallet add <address> or /wallet remove <address>", parse_with = parse_wallet_args)]
     Wallet(String, Option<String>),
-    #[command(description = "Stage mode change: /mode [sim|live]", parse_with = parse_mode_args)]
+    #[command(description = "Stage mode change: /mode [sim|shadow|live]", parse_with = parse_mode_args)]
     Mode(Option<String>),
     #[command(description = "Update runtime risk config: /config <key> <value>")]
     Config(String, String),

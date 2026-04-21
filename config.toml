@@ -1,4 +1,4 @@
-# SuperFast PolyBot v2.5 Configuration
+# SuperFast PolyBot v3 Configuration
 # All values can be overridden via POLYBOT_<KEY> environment variables
 
 [system]
@@ -27,7 +27,7 @@ loss_cooldown_secs = 3600
 [scanner]
 watch_dir = "./signals"
 processed_dir = "./signals/processed"
-dedup_window_secs = 300       # 5 min rolling window per v2.5
+dedup_window_secs = 300
 http_port = 8081
 data_api_url = "https://data-api.polymarket.com"
 poll_interval_ms = 2000
@@ -49,6 +49,7 @@ command_rate_limit_per_min = 30
 emergency_stop_limit_per_hour = 3
 
 [redis]
+enabled = false
 url = "redis://127.0.0.1:6379"
 
 [dashboard]
