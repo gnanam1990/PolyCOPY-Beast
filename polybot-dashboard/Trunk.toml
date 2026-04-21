@@ -4,6 +4,9 @@ dist = "dist"
 public_url = "/"
 filehash = false
 
+[serve]
+port = 8082
+
 [[proxy]]
 rewrite = "/health"
 backend = "http://localhost:8080/health"

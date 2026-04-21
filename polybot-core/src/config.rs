@@ -56,7 +56,6 @@ pub struct AppConfig {
     pub scanner: ScannerConfig,
     pub execution: ExecutionConfig,
     pub telegram: TelegramConfig,
-    pub redis: RedisConfig,
     pub dashboard: DashboardConfig,
 }
 
@@ -129,10 +128,6 @@ pub struct TelegramConfig {
     pub emergency_stop_limit_per_hour: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RedisConfig {
-    pub url: String,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardConfig {
@@ -189,9 +184,6 @@ impl Default for AppConfig {
                 allowed_user_ids: vec![],
                 command_rate_limit_per_min: 30,
                 emergency_stop_limit_per_hour: 3,
-            },
-            redis: RedisConfig {
-                url: "redis://127.0.0.1:6379".to_string(),
             },
             dashboard: DashboardConfig {
                 host: "0.0.0.0".to_string(),
@@ -336,8 +328,8 @@ impl AppConfig {
         if let Ok(val) = std::env::var("POLYBOT_LOG_LEVEL") {
             self.system.log_level = val;
         }
-        if let Ok(val) = std::env::var("POLYBOT_REDIS_URL") {
-            self.redis.url = val;
+        if let Ok(val) = std::env::var("POLYGON_RPC_URL") {
+            self.execution.rpc_endpoints = vec![val];
         }
         if let Ok(val) =
             std::env::var("POLYBOT_DATA_API_URL").or_else(|_| std::env::var("DATA_API_URL"))

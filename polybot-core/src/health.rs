@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 use crate::risk::RiskEngine;
 use crate::metrics::Metrics;
-use crate::state::{self, positions::PositionManager, redis_store::RedisStore, sqlite::{RecentTradeRow, SignalLogEntry, SqliteStore}};
+use crate::state::{self, positions::PositionManager, sqlite::{RecentTradeRow, SignalLogEntry, SqliteStore}};
 use polybot_common::types::Position;
 use rust_decimal::Decimal;
 use tokio::sync::Mutex;
@@ -18,7 +18,6 @@ pub struct HealthState {
     pub simulation_mode: bool,
     pub paused: bool,
     pub metrics: Arc<Metrics>,
-    pub redis_url: String,
     pub sqlite_path: String,
     pub starting_balance: Decimal,
     pub risk_engine: Arc<RiskEngine>,
@@ -47,7 +46,6 @@ pub struct HealthResponse {
     pub simulation: bool,
     pub ws_connected: bool,
     pub rpc_status: String,
-    pub redis_connected: bool,
     pub last_signal_at: Option<String>,
     pub daily_pnl: String,
     pub balance_usd: String,
@@ -79,10 +77,6 @@ pub async fn health_check(State(state): State<Arc<HealthState>>) -> Json<HealthR
         .ok()
         .and_then(|guard| guard.clone());
 
-    let redis_connected = metrics
-        .redis_connected
-        .load(std::sync::atomic::Ordering::Relaxed)
-        == 1;
     let ws_connected = metrics
         .ws_connected
         .load(std::sync::atomic::Ordering::Relaxed)
@@ -117,7 +111,6 @@ pub async fn health_check(State(state): State<Arc<HealthState>>) -> Json<HealthR
         simulation: state.simulation_mode,
         ws_connected,
         rpc_status,
-        redis_connected,
         last_signal_at: last_signal,
         daily_pnl: format!("{:.2}", metrics.daily_pnl_usd()),
         balance_usd: format!("{:.2}", balance_usd),
@@ -162,8 +155,7 @@ pub async fn metrics_handler(State(state): State<Arc<HealthState>>) -> String {
          # HELP polybot_max_latency_us Maximum execution latency in microseconds\n# TYPE polybot_max_latency_us gauge\npolybot_max_latency_us {}\n\
          # HELP polybot_emergency_stops_total Emergency stops triggered\n# TYPE polybot_emergency_stops_total counter\npolybot_emergency_stops_total {}\n\
          # HELP polybot_health Bot health (1=ok, 0=error)\n# TYPE polybot_health gauge\npolybot_health {}\n\
-         # HELP polybot_ws_connected WebSocket connection (1=connected)\n# TYPE polybot_ws_connected gauge\npolybot_ws_connected {}\n\
-         # HELP polybot_redis_connected Redis connection (1=connected)\n# TYPE polybot_redis_connected gauge\npolybot_redis_connected {}\n",
+         # HELP polybot_ws_connected WebSocket connection (1=connected)\n# TYPE polybot_ws_connected gauge\npolybot_ws_connected {}\n",
         uptime,
         m.signals_received.load(std::sync::atomic::Ordering::Relaxed),
         m.signals_processed.load(std::sync::atomic::Ordering::Relaxed),
@@ -180,7 +172,6 @@ pub async fn metrics_handler(State(state): State<Arc<HealthState>>) -> String {
         m.emergency_stops_triggered.load(std::sync::atomic::Ordering::Relaxed),
          if m.is_paused() || state.paused { 0 } else { 1 },
          m.ws_connected.load(std::sync::atomic::Ordering::Relaxed),
-         m.redis_connected.load(std::sync::atomic::Ordering::Relaxed),
     )
 }
 
@@ -190,15 +181,9 @@ pub async fn positions_handler(
     match SqliteStore::open(std::path::Path::new(&state.sqlite_path)) {
         Ok(store) => match store.list_open_positions() {
             Ok(rows) if !rows.is_empty() => Json(rows.into_iter().map(|row| row.position).collect()),
-            _ => match RedisStore::new(&state.redis_url).await {
-                Ok(store) => Json(store.list_positions().await.unwrap_or_default()),
-                Err(_) => Json(Vec::new()),
-            },
+            _ => Json(Vec::new()),
         },
-        Err(_) => match RedisStore::new(&state.redis_url).await {
-            Ok(store) => Json(store.list_positions().await.unwrap_or_default()),
-            Err(_) => Json(Vec::new()),
-        },
+        Err(_) => Json(Vec::new()),
     }
 }
 
@@ -269,7 +254,6 @@ pub async fn emergency_stop_handler(
     state.metrics.record_emergency_stop();
     state.metrics.set_paused(true);
     let closed_positions = state::force_flatten_positions(
-        Some(state.redis_url.as_str()),
         state.metrics.clone(),
         state.position_manager.clone(),
     )
@@ -350,7 +334,6 @@ mod tests {
             simulation_mode: true,
             paused: false,
             metrics,
-            redis_url: "redis://127.0.0.1:6379".to_string(),
             sqlite_path,
             starting_balance: dec!(1000),
             risk_engine,
@@ -429,7 +412,6 @@ mod tests {
             simulation_mode: true,
             paused: false,
             metrics,
-            redis_url: "redis://127.0.0.1:6379".to_string(),
             sqlite_path: sqlite_path.to_string_lossy().to_string(),
             starting_balance: dec!(1000),
             risk_engine,

@@ -98,7 +98,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let reconciler = Arc::new(state::reconciliation::Reconciler::new(
         position_manager.clone(),
-        Some(config.redis.url.clone()),
     ).with_alerts(Some(alert_broadcaster.clone())));
     let market_prices = Arc::new(RwLock::new(HashMap::new()));
     let wallet_activity_state = Arc::new(RwLock::new(scanner::wallet_tracker::WalletActivityState::default()));
@@ -117,7 +116,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         simulation_mode: config.system.simulation,
         paused: false,
         metrics: metrics.clone(),
-        redis_url: config.redis.url.clone(),
         sqlite_path: sqlite_path.clone(),
         starting_balance: if config.risk.base_size_pct > rust_decimal::Decimal::ZERO {
             config.risk.base_size_usd / config.risk.base_size_pct
@@ -245,33 +243,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Spawn Redis stream ingestion
-    let redis_signal_tx = raw_signal_tx.clone();
-    let redis_url = config.redis.url.clone();
-    let redis_signal_max_age_secs = config.scanner.signal_max_age_secs;
-    let redis_ingest_handle = tokio::spawn(async move {
-        let stream_key = std::env::var("POLYBOT_SIGNAL_STREAM")
-            .unwrap_or_else(|_| "polybot:signals".to_string());
-        let redis_ingest = scanner::redis_ingest::RedisIngest::new(
-            &redis_url,
-            &stream_key,
-            redis_signal_max_age_secs,
-        );
-        if let Err(e) = redis_ingest.run(redis_signal_tx).await {
-            tracing::error!(error = %e, "Redis ingest failed");
-        }
-    });
-
-    // Spawn Redis backup loop
-    let redis_backup_url = config.redis.url.clone();
-    let backup_handle = tokio::spawn(async move {
-        let backup_dir = std::env::var("POLYBOT_BACKUP_DIR")
-            .unwrap_or_else(|_| "./backups".to_string());
-        let backup = state::redis_backup::RedisBackup::new(&redis_backup_url, &backup_dir);
-        if let Err(e) = backup.run_backup_loop().await {
-            tracing::error!(error = %e, "Redis backup loop failed");
-        }
-    });
 
     // Spawn health/metrics server
     let health_state_clone = health_state.clone();
@@ -327,8 +298,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         state_handle,
         recon_handle,
         http_handle,
-        redis_ingest_handle,
-        backup_handle,
         health_handle,
         tg_handle,
         fw_handle,

@@ -37,7 +37,6 @@ pub struct Metrics {
     // Connection state
     pub ws_connected: AtomicU64,    // 0 = disconnected, 1 = connected
     pub rpc_healthy: AtomicU64,     // 0 = unhealthy, 1 = healthy
-    pub redis_connected: AtomicU64, // 0 = disconnected, 1 = connected
     pub paused: AtomicU64,          // 0 = active, 1 = paused
 
     // Timing
@@ -66,7 +65,6 @@ impl Metrics {
             max_latency_us: AtomicU64::new(0),
             ws_connected: AtomicU64::new(0),
             rpc_healthy: AtomicU64::new(0),
-            redis_connected: AtomicU64::new(0),
             paused: AtomicU64::new(0),
             start_time: SystemTime::now(),
             last_signal_at: std::sync::Mutex::new(None),
@@ -170,11 +168,6 @@ impl Metrics {
             .store(if healthy { 1 } else { 0 }, Ordering::Relaxed);
     }
 
-    /// Set Redis connection state
-    pub fn set_redis_connected(&self, connected: bool) {
-        self.redis_connected
-            .store(if connected { 1 } else { 0 }, Ordering::Relaxed);
-    }
 
     pub fn set_paused(&self, paused: bool) {
         self.paused
@@ -282,10 +275,8 @@ mod tests {
     fn connection_state() {
         let m = Metrics::new();
         m.set_ws_connected(true);
-        m.set_redis_connected(true);
         m.set_rpc_healthy(false);
         assert_eq!(m.ws_connected.load(Ordering::Relaxed), 1);
-        assert_eq!(m.redis_connected.load(Ordering::Relaxed), 1);
         assert_eq!(m.rpc_healthy.load(Ordering::Relaxed), 0);
     }
 

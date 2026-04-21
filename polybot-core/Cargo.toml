@@ -17,7 +17,6 @@ rust_decimal_macros = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 notify = "7"
-redis = { version = "0.27", features = ["tokio-comp"] }
 teloxide = { version = "0.14", features = ["macros"] }
 axum = "0.8"
 thiserror = "1"

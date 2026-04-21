@@ -515,7 +515,6 @@
           renderMeta("health-meta", [
             { label: "System Status", value: health.status.toUpperCase() },
             { label: "Open Positions", value: String(health.open_positions) },
-            { label: "Redis", value: health.redis_connected ? pill("Connected", true) : pill("Disconnected", false) },
             { label: "WebSocket", value: health.ws_connected ? pill("Connected", true) : pill("Disconnected", false) },
             { label: "RPC", value: health.rpc_status },
             { label: "Paused", value: health.paused ? pill("Paused", false) : pill("Active", true) },

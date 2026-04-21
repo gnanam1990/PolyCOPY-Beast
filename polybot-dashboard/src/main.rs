@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 mod app;
-mod components;
 mod data;
 
 use app::App;

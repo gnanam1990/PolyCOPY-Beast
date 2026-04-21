@@ -1,8 +1,6 @@
 pub mod pnl;
 pub mod positions;
 pub mod reconciliation;
-pub mod redis_backup;
-pub mod redis_store;
 pub mod sqlite;
 
 use polybot_common::errors::PolybotError;
@@ -80,7 +78,6 @@ fn update_daily_stats(
 }
 
 pub async fn force_flatten_positions(
-    redis_url: Option<&str>,
     metrics: Arc<Metrics>,
     position_manager: Arc<Mutex<positions::PositionManager>>,
 ) -> Result<usize, PolybotError> {
@@ -88,16 +85,6 @@ pub async fn force_flatten_positions(
         let mut manager = position_manager.lock().await;
         manager.close_all_positions()
     };
-
-    if let Some(redis_url) = redis_url {
-        if let Ok(store) = redis_store::RedisStore::new(redis_url).await {
-            for position in &closed_positions {
-                if let Err(e) = store.remove_position(position).await {
-                    tracing::error!(error = %e, "Failed to remove flattened position from Redis");
-                }
-            }
-        }
-    }
 
     metrics.set_open_positions(0);
     for _ in 0..closed_positions.len() {
@@ -119,114 +106,8 @@ pub async fn run_state_manager(
     let sqlite_path = sqlite::SqliteStore::open(std::path::Path::new(&sqlite_path))
         .map(|_| sqlite_path)
         .ok();
-    let redis_store = redis_store::RedisStore::new(&config.redis.url).await;
 
-    match redis_store {
-        Ok(store) => {
-            tracing::info!("Connected to Redis for state persistence");
-            metrics.set_redis_connected(true);
-            run_with_redis(
-                receiver,
-                metrics,
-                position_manager,
-                market_prices,
-                &store,
-                sqlite_path.as_deref(),
-                &config,
-            )
-            .await
-        }
-        Err(e) => {
-            tracing::warn!("Redis unavailable ({}), running in memory-only mode", e);
-            metrics.set_redis_connected(false);
-            run_in_memory(receiver, metrics, position_manager, market_prices, sqlite_path.as_deref(), &config).await
-        }
-    }
-}
-
-async fn run_with_redis(
-    mut receiver: mpsc::Receiver<Trade>,
-    metrics: Arc<Metrics>,
-    position_manager: Arc<Mutex<positions::PositionManager>>,
-    market_prices: Arc<RwLock<HashMap<String, Decimal>>>,
-    redis_store: &redis_store::RedisStore,
-    sqlite_path: Option<&str>,
-    config: &AppConfig,
-) -> Result<(), PolybotError> {
-    while let Some(trade) = receiver.recv().await {
-        tracing::info!(
-            trade_id = %trade.id,
-            signal_id = %trade.signal_id,
-            status = ?trade.status,
-            simulated = trade.simulated,
-            "Processing trade"
-        );
-
-        // Persist trade to Redis
-        if let Err(e) = redis_store.store_trade(&trade).await {
-            tracing::error!(error = %e, "Failed to persist trade to Redis");
-        }
-
-        if let Some(sqlite_path) = sqlite_path {
-            let store = sqlite::SqliteStore::open(std::path::Path::new(sqlite_path));
-            if let Ok(store) = store {
-                if let Err(e) = store.insert_trade(&trade) {
-                    tracing::error!(error = %e, "Failed to persist trade to SQLite");
-                }
-            } else if let Err(e) = store {
-                tracing::error!(error = %e, "Failed to open SQLite for trade persistence");
-            }
-        }
-
-        let sqlite_store = sqlite_path.and_then(|path| sqlite::SqliteStore::open(std::path::Path::new(path)).ok());
-
-        let (position_snapshot, current_price, open_positions, unrealized) = {
-            let mut position_manager = position_manager.lock().await;
-            if let Err(e) = position_manager.update_from_trade(&trade) {
-                tracing::error!(error = %e, "Failed to update position from trade");
-            }
-
-            let current_prices = market_prices.read().await.clone();
-            (
-                position_manager
-                    .get_position(&PositionKey::new(trade.market_id.clone(), trade.side))
-                    .cloned(),
-                current_prices.get(&trade.market_id).copied(),
-                position_manager.open_position_count(),
-                pnl::calculate_unrealized_pnl(&position_manager, &current_prices),
-            )
-        };
-
-        // Update position in Redis
-        if let Some(pos) = position_snapshot.as_ref() {
-            if let Err(e) = redis_store.store_position(pos).await {
-                tracing::error!(error = %e, "Failed to persist position to Redis");
-            }
-
-            if let Some(store) = sqlite_store.as_ref() {
-                let owner = match store.lookup_signal_wallet(&trade.signal_id) {
-                    Ok(owner) => owner,
-                    Err(e) => {
-                        tracing::error!(error = %e, "Failed to lookup signal owner for SQLite position persistence");
-                        None
-                    }
-                };
-                if let Err(e) = store.upsert_position(pos, current_price, Some(unrealized), owner.as_deref()) {
-                    tracing::error!(error = %e, "Failed to persist position to SQLite");
-                }
-                if let Err(e) = update_daily_stats(store, config, &metrics, &trade, unrealized) {
-                    tracing::error!(error = %e, "Failed to update SQLite daily stats");
-                }
-            }
-        }
-
-        metrics.set_open_positions(open_positions);
-        metrics.update_daily_pnl(unrealized.to_f64().unwrap_or(0.0));
-        tracing::info!(unrealized_pnl = %unrealized, "Unrealized PnL updated");
-    }
-
-    tracing::info!("State manager shutting down");
-    Ok(())
+    run_in_memory(receiver, metrics, position_manager, market_prices, sqlite_path.as_deref(), &config).await
 }
 
 async fn run_in_memory(
@@ -341,7 +222,7 @@ mod tests {
         }
         metrics.set_open_positions(2);
 
-        let closed = force_flatten_positions(None, metrics.clone(), position_manager.clone())
+        let closed = force_flatten_positions(metrics.clone(), position_manager.clone())
             .await
             .unwrap();
 

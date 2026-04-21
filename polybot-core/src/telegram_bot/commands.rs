@@ -13,7 +13,6 @@ use crate::setup;
 use crate::state;
 use crate::state::positions::PositionManager;
 use crate::state::reconciliation::Reconciler;
-use crate::state::redis_store::RedisStore;
 use crate::state::sqlite::{SignalLogEntry, SqliteStore, TargetRow};
 use polybot_common::types::{ExecutionMode, Position};
 use std::sync::Arc;
@@ -157,11 +156,6 @@ pub async fn handle_command(
             } else {
                 "Disconnected"
             };
-            let redis = if metrics.redis_connected.load(Ordering::Relaxed) == 1 {
-                "Connected"
-            } else {
-                "Disconnected"
-            };
             let rpc = if metrics.rpc_healthy.load(Ordering::Relaxed) == 1 {
                 "Healthy"
             } else {
@@ -182,8 +176,8 @@ pub async fn handle_command(
             bot.send_message(
                 msg.chat.id,
                 format!(
-                    "SuperFast PolyBot v3\nMode: {}\nStatus: {}\nUptime: {}\nPositions: {}\nSignals: {}\nFollowed wallets: {}\nWS: {}\nRedis: {}\nRPC: {}{}",
-                    mode, bot_status, uptime_fmt, open, sigs, wallets, ws, redis, rpc, pending_mode
+                    "SuperFast PolyBot v3\nMode: {}\nStatus: {}\nUptime: {}\nPositions: {}\nSignals: {}\nFollowed wallets: {}\nWS: {}\nRPC: {}{}",
+                    mode, bot_status, uptime_fmt, open, sigs, wallets, ws, rpc, pending_mode
                 )
             ).await?;
         }
@@ -198,21 +192,9 @@ pub async fn handle_command(
                         let positions = rows.into_iter().map(|row| row.position).collect::<Vec<_>>();
                         format_positions_message(&positions, pnl)
                     }
-                    _ => match RedisStore::new(&config.redis.url).await {
-                        Ok(store) => match store.list_positions().await {
-                            Ok(positions) => format_positions_message(&positions, pnl),
-                            Err(_) => fallback_positions_message(&metrics),
-                        },
-                        Err(_) => fallback_positions_message(&metrics),
-                    },
+                    _ => fallback_positions_message(&metrics),
                 },
-                Err(_) => match RedisStore::new(&config.redis.url).await {
-                    Ok(store) => match store.list_positions().await {
-                        Ok(positions) => format_positions_message(&positions, pnl),
-                        Err(_) => fallback_positions_message(&metrics),
-                    },
-                    Err(_) => fallback_positions_message(&metrics),
-                },
+                Err(_) => fallback_positions_message(&metrics),
             };
 
             bot.send_message(msg.chat.id, body).await?;
@@ -281,7 +263,6 @@ pub async fn handle_command(
             Some(ConfirmAction::EmergencyStop) => {
                 risk_engine.set_emergency_stop(true).await;
                 let closed_positions = state::force_flatten_positions(
-                    Some(config.redis.url.as_str()),
                     metrics.clone(),
                     position_manager.clone(),
                 )

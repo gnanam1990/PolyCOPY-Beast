@@ -1,15 +1,16 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthData {
     pub status: String,
     pub uptime_secs: u64,
     pub simulation: bool,
     pub ws_connected: bool,
     pub rpc_status: String,
-    pub redis_connected: bool,
     pub last_signal_at: Option<String>,
     pub daily_pnl: String,
+    pub balance_usd: String,
+    pub drawdown_pct: String,
     pub paused: bool,
     pub open_positions: u64,
     pub signals_received: u64,
@@ -17,7 +18,7 @@ pub struct HealthData {
     pub emergency_stops: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricsData {
     pub signals_received: u64,
     pub signals_processed: u64,
@@ -28,7 +29,7 @@ pub struct MetricsData {
     pub daily_pnl_usd: f64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PositionData {
     pub id: String,
     pub market_id: String,
@@ -39,7 +40,7 @@ pub struct PositionData {
     pub status: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignalData {
     pub signal_id: String,
     pub wallet_address: String,

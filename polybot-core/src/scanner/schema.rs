@@ -24,7 +24,6 @@ fn parse_signal_source(raw: &serde_json::Value) -> SignalSource {
         "polling" => SignalSource::Polling,
         "websocket" => SignalSource::Websocket,
         "http" => SignalSource::Http,
-        "redis" => SignalSource::Redis,
         _ => SignalSource::Manual,
     }
 }
