@@ -78,6 +78,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     if let Ok(store) = state::sqlite::SqliteStore::open(std::path::Path::new(&sqlite_path)) {
+        // Seed wallets from env configuration (POLYBOT_TARGET_WALLETS)
+        for wallet in &config.scanner.target_wallets {
+            if let Err(e) = store.upsert_target(wallet, None, &config.scanner.target_categories, None) {
+                tracing::error!(error = %e, wallet = %wallet, "Failed to seed env-configured target wallet");
+            } else {
+                tracing::info!(wallet = %wallet, "Seeded env-configured target wallet");
+            }
+        }
+
         if let Ok(targets) = store.list_active_targets() {
             for target in targets {
                 let _ = risk_engine.add_followed_wallet(&target.wallet_address).await;

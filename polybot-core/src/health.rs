@@ -420,6 +420,7 @@ mod tests {
             starting_balance: dec!(1000),
             risk_engine,
             position_manager,
+            event_tx: tokio::sync::broadcast::channel(2).0,
         })
     }
 
@@ -498,6 +499,7 @@ mod tests {
             starting_balance: dec!(1000),
             risk_engine,
             position_manager,
+            event_tx: tokio::sync::broadcast::channel(2).0,
         });
 
         let result = resume_handler(State(state), Query(ResumeQuery { confirm: None })).await;

@@ -108,6 +108,8 @@ pub struct ScannerConfig {
     pub use_websocket: bool,
     #[serde(default)]
     pub target_categories: Vec<Category>,
+    #[serde(default)]
+    pub target_wallets: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -171,6 +173,7 @@ impl Default for AppConfig {
                 signal_max_age_secs: default_signal_max_age_secs(),
                 use_websocket: default_use_websocket(),
                 target_categories: vec![],
+                target_wallets: vec![],
             },
             execution: ExecutionConfig {
                 slippage_threshold: C::DEFAULT_SLIPPAGE_THRESHOLD,
@@ -362,6 +365,13 @@ impl AppConfig {
                 .filter_map(|category| Category::try_from(category.trim()).ok())
                 .collect();
         }
+        if let Ok(val) = std::env::var("POLYBOT_TARGET_WALLETS") {
+            self.scanner.target_wallets = val
+                .split(',')
+                .map(|w| w.trim().to_lowercase())
+                .filter(|w| !w.is_empty())
+                .collect();
+        }
         if let Ok(val) = std::env::var("POLYBOT_BASE_SIZE_USD") {
             if let Ok(d) = val.parse::<Decimal>() {
                 self.risk.base_size_usd = d;
@@ -458,6 +468,15 @@ mod tests {
         config.apply_env_overrides();
         assert_eq!(config.telegram.allowed_user_ids, vec![123, 456, 789]);
         std::env::remove_var("POLYBOT_TELEGRAM_ALLOWED_USER_IDS");
+    }
+
+    #[test]
+    fn apply_env_target_wallets() {
+        std::env::set_var("POLYBOT_TARGET_WALLETS", "0xabc, 0xDEF ");
+        let mut config = AppConfig::default();
+        config.apply_env_overrides();
+        assert_eq!(config.scanner.target_wallets, vec!["0xabc", "0xdef"]);
+        std::env::remove_var("POLYBOT_TARGET_WALLETS");
     }
 
     #[test]
