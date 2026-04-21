@@ -7,6 +7,7 @@ use serde_json::Value;
 use tokio::sync::{mpsc, RwLock};
 
 use crate::config::AppConfig;
+use crate::metrics::Metrics;
 use crate::risk::RiskEngine;
 
 use super::schema::normalize_data_api_trade;
@@ -19,10 +20,11 @@ pub struct DataApiPoller {
     signal_max_age_secs: u64,
     allowed_categories: Vec<polybot_common::types::Category>,
     state: Arc<RwLock<WalletActivityState>>,
+    metrics: Option<Arc<Metrics>>,
 }
 
 impl DataApiPoller {
-    pub fn new(config: &AppConfig, state: Arc<RwLock<WalletActivityState>>) -> Result<Self, PolybotError> {
+    pub fn new(config: &AppConfig, state: Arc<RwLock<WalletActivityState>>, metrics: Arc<Metrics>) -> Result<Self, PolybotError> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
@@ -35,6 +37,7 @@ impl DataApiPoller {
             signal_max_age_secs: config.scanner.signal_max_age_secs,
             allowed_categories: config.scanner.target_categories.clone(),
             state,
+            metrics: Some(metrics),
         })
     }
 
@@ -82,6 +85,7 @@ impl DataApiPoller {
             query.push(("start", last_seen.to_string()));
         }
 
+        let start = std::time::Instant::now();
         let response = self
             .client
             .get(format!("{}/activity", self.base_url))
@@ -89,6 +93,11 @@ impl DataApiPoller {
             .send()
             .await
             .map_err(|e| PolybotError::Scanner(format!("Data API activity request failed: {}", e)))?;
+
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+        if let Some(ref metrics) = self.metrics {
+            metrics.set_data_api_latency_ms(elapsed_ms);
+        }
 
         if !response.status().is_success() {
             return Err(PolybotError::Scanner(format!(

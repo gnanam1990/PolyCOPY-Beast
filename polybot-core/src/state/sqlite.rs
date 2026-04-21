@@ -20,6 +20,25 @@ pub struct SignalLogEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedSignalRow {
+    pub id: String,
+    pub source: String,
+    pub tx_hash: Option<String>,
+    pub received_at: String,
+    pub target_wallet: String,
+    pub market_id: String,
+    pub token_id: String,
+    pub side: String,
+    pub outcome: String,
+    pub target_price: Decimal,
+    pub target_size: Decimal,
+    pub confidence: u8,
+    pub secret_level: u8,
+    pub category: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedPositionRow {
     pub position: Position,
     pub current_price: Option<Decimal>,
@@ -137,6 +156,23 @@ impl SqliteStore {
                 disposition TEXT NOT NULL,
                 received_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS signals (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                tx_hash TEXT UNIQUE,
+                received_at TEXT NOT NULL,
+                target_wallet TEXT NOT NULL,
+                market_id TEXT NOT NULL,
+                token_id TEXT NOT NULL,
+                side TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                target_price TEXT NOT NULL,
+                target_size TEXT NOT NULL,
+                confidence INTEGER NOT NULL,
+                secret_level INTEGER NOT NULL,
+                category TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending'
+            );
             CREATE TABLE IF NOT EXISTS targets (
                 wallet_address TEXT PRIMARY KEY,
                 label TEXT,
@@ -211,6 +247,85 @@ impl SqliteStore {
             rusqlite::params![signal_id, timestamp, wallet_address, market_id, confidence, secret_level, category, side, disposition],
         ).map_err(|e| PolybotError::State(format!("Failed to insert signal log: {}", e)))?;
         Ok(())
+    }
+
+    /// Persist signal to the PRD-compliant `signals` table.
+    pub fn insert_signal(
+        &self,
+        signal: &polybot_common::types::Signal,
+        source: &str,
+        outcome: &str,
+        status: &str,
+    ) -> Result<(), PolybotError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO signals (id, source, tx_hash, received_at, target_wallet, market_id, token_id, side, outcome, target_price, target_size, confidence, secret_level, category, status)
+             VALUES (?1, ?2, ?3, datetime('now'), ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            rusqlite::params![
+                signal.signal_id,
+                source,
+                signal.tx_hash.as_deref(),
+                signal.wallet_address,
+                signal.market_id,
+                signal.token_id.as_deref().unwrap_or(""),
+                format!("{:?}", signal.side),
+                outcome,
+                signal.target_price.map(|v| v.to_string()).unwrap_or_else(|| Decimal::ZERO.to_string()),
+                signal.target_size_usdc.map(|v| v.to_string()).unwrap_or_else(|| Decimal::ZERO.to_string()),
+                signal.confidence,
+                signal.secret_level,
+                signal.category.to_string(),
+                status,
+            ],
+        ).map_err(|e| PolybotError::State(format!("Failed to insert signal: {}", e)))?;
+        Ok(())
+    }
+
+    /// Anti-duplication rule: find which wallet owns an open position for a given token_id.
+    pub fn get_open_position_owner_by_token(&self, token_id: &str) -> Result<Option<String>, PolybotError> {
+        use rusqlite::OptionalExtension as _;
+        self.conn
+            .query_row(
+                "SELECT owned_by_wallet FROM positions WHERE owned_by_wallet IS NOT NULL AND market_id = ?1 AND status IN ('Open', 'open') LIMIT 1",
+                [token_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| PolybotError::State(format!("Failed to query position owner by token: {}", e)))
+    }
+
+    pub fn update_signal_status(&self, signal_id: &str, status: &str) -> Result<(), PolybotError> {
+        self.conn.execute(
+            "UPDATE signals SET status = ?2 WHERE id = ?1",
+            [signal_id, status],
+        ).map_err(|e| PolybotError::State(format!("Failed to update signal status: {}", e)))?;
+        Ok(())
+    }
+
+    pub fn get_signal(&self, signal_id: &str) -> Result<Option<PersistedSignalRow>, PolybotError> {
+        use rusqlite::OptionalExtension as _;
+        self.conn.query_row(
+            "SELECT id, source, tx_hash, received_at, target_wallet, market_id, token_id, side, outcome, target_price, target_size, confidence, secret_level, category, status FROM signals WHERE id = ?1",
+            [signal_id],
+            |row| {
+                Ok(PersistedSignalRow {
+                    id: row.get(0)?,
+                    source: row.get(1)?,
+                    tx_hash: row.get(2)?,
+                    received_at: row.get(3)?,
+                    target_wallet: row.get(4)?,
+                    market_id: row.get(5)?,
+                    token_id: row.get(6)?,
+                    side: row.get(7)?,
+                    outcome: row.get(8)?,
+                    target_price: Decimal::from_str(&row.get::<_, String>(9)?).unwrap_or(Decimal::ZERO),
+                    target_size: Decimal::from_str(&row.get::<_, String>(10)?).unwrap_or(Decimal::ZERO),
+                    confidence: row.get(11)?,
+                    secret_level: row.get(12)?,
+                    category: row.get(13)?,
+                    status: row.get(14)?,
+                })
+            },
+        ).optional().map_err(|e| PolybotError::State(format!("Failed to get signal: {}", e)))
     }
 
     pub fn get_trade_count(&self) -> Result<u64, PolybotError> {
@@ -395,6 +510,33 @@ impl SqliteStore {
                 })
             },
         ).optional().map_err(|e| PolybotError::State(format!("Failed to load daily stats: {}", e)))
+    }
+
+    /// Retrieve the last N days of daily stats, ordered by date descending.
+    pub fn get_recent_daily_stats(&self, limit: usize) -> Result<Vec<DailyStatsRow>, PolybotError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT date, starting_balance, realized_pnl, unrealized_pnl, volume_traded, trades_placed, trades_filled, trades_rejected, drawdown_pct, paused_at, notes FROM daily_stats ORDER BY date DESC LIMIT ?1"
+        ).map_err(|e| PolybotError::State(format!("Failed to prepare recent stats: {}", e)))?;
+        let rows = stmt.query_map([limit], |row| {
+            Ok(DailyStatsRow {
+                date: row.get(0)?,
+                starting_balance: Decimal::from_str(&row.get::<_, String>(1)?).unwrap_or(Decimal::ZERO),
+                realized_pnl: Decimal::from_str(&row.get::<_, String>(2)?).unwrap_or(Decimal::ZERO),
+                unrealized_pnl: Decimal::from_str(&row.get::<_, String>(3)?).unwrap_or(Decimal::ZERO),
+                volume_traded: Decimal::from_str(&row.get::<_, String>(4)?).unwrap_or(Decimal::ZERO),
+                trades_placed: row.get(5)?,
+                trades_filled: row.get(6)?,
+                trades_rejected: row.get(7)?,
+                drawdown_pct: Decimal::from_str(&row.get::<_, String>(8)?).unwrap_or(Decimal::ZERO),
+                paused_at: row.get(9)?,
+                notes: row.get(10)?,
+            })
+        }).map_err(|e| PolybotError::State(format!("Failed to query recent stats: {}", e)))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| PolybotError::State(format!("Row error: {}", e)))?);
+        }
+        Ok(out)
     }
 
     pub fn upsert_target(

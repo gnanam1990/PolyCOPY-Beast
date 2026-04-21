@@ -7,6 +7,7 @@ pub struct HealthData {
     pub simulation: bool,
     pub ws_connected: bool,
     pub rpc_status: String,
+    pub data_api_latency_ms: u64,
     pub last_signal_at: Option<String>,
     pub daily_pnl: String,
     pub balance_usd: String,
@@ -27,6 +28,9 @@ pub struct MetricsData {
     pub current_drawdown_pct: f64,
     pub open_positions: u32,
     pub daily_pnl_usd: f64,
+    pub avg_latency_us: u64,
+    pub max_latency_us: u64,
+    pub data_api_latency_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +54,23 @@ pub struct SignalData {
     pub disposition: String,
     pub market_id: String,
     pub side: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyStatsEntry {
+    pub date: String,
+    pub realized_pnl: String,
+    pub unrealized_pnl: String,
+    pub volume_traded: String,
+    pub trades_placed: u32,
+    pub trades_filled: u32,
+    pub trades_rejected: u32,
+    pub drawdown_pct: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyStatsData {
+    pub entries: Vec<DailyStatsEntry>,
 }
 
 fn api_path(path: &str) -> String {
@@ -86,6 +107,9 @@ pub async fn fetch_metrics() -> Result<MetricsData, String> {
         current_drawdown_pct: 0.0,
         open_positions: 0,
         daily_pnl_usd: 0.0,
+        avg_latency_us: 0,
+        max_latency_us: 0,
+        data_api_latency_ms: 0,
     };
     for line in text.lines() {
         if line.starts_with("polybot_signals_received_total ") {
@@ -137,6 +161,27 @@ pub async fn fetch_metrics() -> Result<MetricsData, String> {
                 .unwrap_or("0")
                 .parse()
                 .unwrap_or(0.0);
+        } else if line.starts_with("polybot_avg_latency_us ") {
+            data.avg_latency_us = line
+                .split_whitespace()
+                .last()
+                .unwrap_or("0")
+                .parse()
+                .unwrap_or(0);
+        } else if line.starts_with("polybot_max_latency_us ") {
+            data.max_latency_us = line
+                .split_whitespace()
+                .last()
+                .unwrap_or("0")
+                .parse()
+                .unwrap_or(0);
+        } else if line.starts_with("polybot_data_api_latency_ms ") {
+            data.data_api_latency_ms = line
+                .split_whitespace()
+                .last()
+                .unwrap_or("0")
+                .parse()
+                .unwrap_or(0);
         }
     }
     Ok(data)
@@ -162,4 +207,15 @@ pub async fn fetch_signals(limit: usize) -> Result<Vec<SignalData>, String> {
         .json()
         .await
         .map_err(|e| format!("Signals parse error: {}", e))
+}
+
+pub async fn fetch_daily_stats() -> Result<Vec<DailyStatsEntry>, String> {
+    gloo_net::http::Request::get(&api_path("/daily"))
+        .send()
+        .await
+        .map_err(|e| format!("Daily stats fetch error: {}", e))?
+        .json::<DailyStatsData>()
+        .await
+        .map_err(|e| format!("Daily stats parse error: {}", e))
+        .map(|d| d.entries)
 }

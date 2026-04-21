@@ -18,7 +18,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 notify = "7"
 teloxide = { version = "0.14", features = ["macros"] }
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 thiserror = "1"
 futures = "0.3"
 rusqlite = { version = "0.31", features = ["bundled"] }

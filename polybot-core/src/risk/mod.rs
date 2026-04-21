@@ -164,6 +164,33 @@ impl RiskEngine {
         }
         drop(followed_wallets);
 
+        // v3.0: Anti-duplication rule — one owner per token_id.
+        if let Some(token_id) = signal.token_id.as_ref() {
+            let sqlite_path = std::env::var("POLYBOT_SQLITE_PATH").unwrap_or_else(|_| "./polybot.db".to_string());
+            if let Ok(store) = crate::state::sqlite::SqliteStore::open(std::path::Path::new(&sqlite_path)) {
+                if let Ok(Some(existing_owner)) = store.get_open_position_owner_by_token(token_id) {
+                    if existing_owner.to_lowercase() != signal.wallet_address.to_lowercase() {
+                        return RiskDecision {
+                            signal_id: signal.signal_id.clone(),
+                            market_id: signal.market_id.clone(),
+                            side: signal.side,
+                            category: signal.category,
+                            position_size_usd: Decimal::ZERO,
+                            confidence_multiplier: Decimal::ZERO,
+                            secret_level_multiplier: Decimal::ZERO,
+                            drawdown_factor: Decimal::ZERO,
+                            blocked: true,
+                            manual_review: false,
+                            decision: Decision::Skip(format!(
+                                "Anti-dup: token {} already owned by {}",
+                                token_id, existing_owner
+                            )),
+                        };
+                    }
+                }
+            }
+        }
+
         // 2. v2.5: Check manual review (confidence < 3 or secret_level < 3)
         let manual_review = signal.requires_manual_review();
         if manual_review {
@@ -496,6 +523,13 @@ pub async fn run_risk_engine(
 ) -> Result<(), polybot_common::errors::PolybotError> {
     while let Some(event) = receiver.recv().await {
         metrics.record_signal_received();
+        metrics.broadcast_event("signal_received", serde_json::json!({
+            "signal_id": &event.signal.signal_id,
+            "wallet": &event.signal.wallet_address,
+            "market_id": &event.signal.market_id,
+            "confidence": event.signal.confidence,
+            "side": format!("{:?}", event.signal.side),
+        }));
         let decision = engine.evaluate(&event.signal).await;
 
         if matches!(decision.decision, Decision::Execute) {
@@ -527,6 +561,32 @@ pub async fn run_risk_engine(
             ) {
                 tracing::error!(error = %e, "Failed to persist signal log to SQLite");
             }
+            // v3.0: Also persist to PRD-compliant signals table
+            let signal_source = match event.signal.source {
+                polybot_common::types::SignalSource::Websocket => "websocket",
+                polybot_common::types::SignalSource::Polling => "polling",
+                polybot_common::types::SignalSource::Http => "http",
+                polybot_common::types::SignalSource::Manual => "manual",
+                polybot_common::types::SignalSource::Redis => "redis",
+            };
+            let status = match &decision.decision {
+                Decision::Execute => "executed",
+                Decision::ManualReview => "pending",
+                Decision::EmergencyStop => "rejected",
+                Decision::Skip(_) => "rejected",
+            };
+            let outcome = match event.signal.side {
+                polybot_common::types::Side::Yes => "YES",
+                polybot_common::types::Side::No => "NO",
+            };
+            if let Err(e) = store.insert_signal(
+                &event.signal,
+                signal_source,
+                outcome,
+                status,
+            ) {
+                tracing::error!(error = %e, "Failed to persist signal to PRD signals table");
+            }
         }
 
         tracing::info!(
@@ -537,6 +597,12 @@ pub async fn run_risk_engine(
             manual_review = decision.manual_review,
             "Risk decision made"
         );
+        metrics.broadcast_event("risk_decision", serde_json::json!({
+            "signal_id": &decision.signal_id,
+            "decision": format!("{:?}", decision.decision),
+            "size": decision.position_size_usd.to_string(),
+            "blocked": decision.blocked,
+        }));
 
         if sender.send(decision).await.is_err() {
             tracing::error!("Execution channel closed");

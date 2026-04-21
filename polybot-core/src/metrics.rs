@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::SystemTime;
+use tokio::sync::broadcast;
 
 /// Shared metrics state accessible from all modules.
 /// Updated atomically by scanner, risk, execution, and state modules.
@@ -37,7 +38,11 @@ pub struct Metrics {
     // Connection state
     pub ws_connected: AtomicU64,    // 0 = disconnected, 1 = connected
     pub rpc_healthy: AtomicU64,     // 0 = unhealthy, 1 = healthy
+    pub data_api_latency_ms: AtomicU64, // last known Data API latency in ms
     pub paused: AtomicU64,          // 0 = active, 1 = paused
+
+    // Event broadcast for real-time dashboard streaming
+    pub event_tx: std::sync::Mutex<Option<broadcast::Sender<String>>>,
 
     // Timing
     pub start_time: SystemTime,
@@ -65,7 +70,9 @@ impl Metrics {
             max_latency_us: AtomicU64::new(0),
             ws_connected: AtomicU64::new(0),
             rpc_healthy: AtomicU64::new(0),
+            data_api_latency_ms: AtomicU64::new(0),
             paused: AtomicU64::new(0),
+            event_tx: std::sync::Mutex::new(None),
             start_time: SystemTime::now(),
             last_signal_at: std::sync::Mutex::new(None),
         }
@@ -156,7 +163,10 @@ impl Metrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Set WebSocket connection state
+    /// Set Data API latency in milliseconds
+    pub fn set_data_api_latency_ms(&self, ms: u64) {
+        self.data_api_latency_ms.store(ms, Ordering::Relaxed);
+    }
     pub fn set_ws_connected(&self, connected: bool) {
         self.ws_connected
             .store(if connected { 1 } else { 0 }, Ordering::Relaxed);
@@ -194,6 +204,32 @@ impl Metrics {
     /// Get current drawdown as percentage
     pub fn current_drawdown_pct(&self) -> f64 {
         self.current_drawdown_bps.load(Ordering::Relaxed) as f64 / 10000.0
+    }
+
+    /// Attach event broadcast sender for real-time dashboard streaming
+    pub fn set_event_tx(&self, tx: broadcast::Sender<String>) {
+        if let Ok(mut guard) = self.event_tx.lock() {
+            *guard = Some(tx);
+        }
+    }
+
+    /// Broadcast a JSON event string to dashboard WebSocket clients (fire-and-forget)
+    pub fn broadcast_event(
+        &self,
+        event_type: &str,
+        payload: serde_json::Value,
+    ) {
+        if let Ok(guard) = self.event_tx.lock() {
+            if let Some(ref tx) = *guard {
+                let msg = serde_json::json!({
+                    "type": event_type,
+                    "data": payload,
+                    "ts": chrono::Utc::now().to_rfc3339(),
+                })
+                .to_string();
+                let _ = tx.send(msg);
+            }
+        }
     }
 }
 

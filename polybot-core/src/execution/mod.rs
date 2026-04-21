@@ -253,6 +253,13 @@ pub async fn run_execution_engine(
                         );
                         let trade = order_builder::create_simulated_trade(&decision, &order);
                         metrics.record_trade(true);
+                        metrics.broadcast_event("trade_placed", serde_json::json!({
+                            "signal_id": &decision.signal_id,
+                            "market_id": &decision.market_id,
+                            "size_usd": trade.size_usd.to_string(),
+                            "price": trade.price.to_string(),
+                            "mode": "simulation",
+                        }));
                         if let Some(alerts) = &alerts {
                             alerts.info(format!(
                                 "Trade executed in simulation: signal={} market={} size_usd={} price={}",
@@ -289,6 +296,13 @@ pub async fn run_execution_engine(
                                 Ok(trade) => {
                                     metrics.record_latency(started.elapsed().as_micros() as u64);
                                     metrics.record_trade(false);
+                                    metrics.broadcast_event("trade_placed", serde_json::json!({
+                                        "signal_id": &decision.signal_id,
+                                        "market_id": &decision.market_id,
+                                        "size_usd": trade.size_usd.to_string(),
+                                        "price": trade.price.to_string(),
+                                        "mode": "live",
+                                    }));
                                     if let Some(alerts) = &alerts {
                                         alerts.info(format!(
                                             "Live trade executed: signal={} market={} size_usd={} price={}",

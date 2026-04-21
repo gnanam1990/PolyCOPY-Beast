@@ -60,6 +60,13 @@ pub async fn run_startup_preflight(
     report.approvals_ready = Some(approvals.ready_for_live_trading);
 
     if !approvals.ready_for_live_trading {
+        let auto_approve = std::env::var("POLYBOT_AUTO_APPROVE")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+        if auto_approve {
+            tracing::warn!("POLYBOT_AUTO_APPROVE enabled but on-chain approval transactions require manual signing.");
+            tracing::warn!("Please ensure USDC and CTF conditional token approvals are set for the Polymarket exchange contracts.");
+        }
         return Err(PolybotError::Config(approvals.guidance_message()));
     }
 

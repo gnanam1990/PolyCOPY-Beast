@@ -1,4 +1,11 @@
-use axum::{extract::{Query, State}, http::StatusCode, response::{Html, Json}, routing::{get, post}, Router};
+use axum::{
+    extract::{Query, State, WebSocketUpgrade},
+    extract::ws::Message as WsMessage,
+    http::StatusCode,
+    response::{Html, Json},
+    routing::{get, post},
+    Router,
+};
 use serde::Serialize;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -8,7 +15,7 @@ use crate::metrics::Metrics;
 use crate::state::{self, positions::PositionManager, sqlite::{RecentTradeRow, SignalLogEntry, SqliteStore}};
 use polybot_common::types::Position;
 use rust_decimal::Decimal;
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 
 const DASHBOARD_HTML: &str = include_str!("dashboard_page.html");
 
@@ -22,6 +29,7 @@ pub struct HealthState {
     pub starting_balance: Decimal,
     pub risk_engine: Arc<RiskEngine>,
     pub position_manager: Arc<Mutex<PositionManager>>,
+    pub event_tx: broadcast::Sender<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -39,6 +47,28 @@ pub struct ResumeQuery {
     pub confirm: Option<bool>,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DailyStatsQuery {
+    pub days: Option<usize>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DailyStatsEntry {
+    pub date: String,
+    pub realized_pnl: String,
+    pub unrealized_pnl: String,
+    pub volume_traded: String,
+    pub trades_placed: u32,
+    pub trades_filled: u32,
+    pub trades_rejected: u32,
+    pub drawdown_pct: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DailyStatsResponse {
+    pub entries: Vec<DailyStatsEntry>,
+}
+
 #[derive(Serialize)]
 pub struct HealthResponse {
     pub status: String,
@@ -46,6 +76,7 @@ pub struct HealthResponse {
     pub simulation: bool,
     pub ws_connected: bool,
     pub rpc_status: String,
+    pub data_api_latency_ms: u64,
     pub last_signal_at: Option<String>,
     pub daily_pnl: String,
     pub balance_usd: String,
@@ -111,6 +142,9 @@ pub async fn health_check(State(state): State<Arc<HealthState>>) -> Json<HealthR
         simulation: state.simulation_mode,
         ws_connected,
         rpc_status,
+        data_api_latency_ms: metrics
+            .data_api_latency_ms
+            .load(std::sync::atomic::Ordering::Relaxed),
         last_signal_at: last_signal,
         daily_pnl: format!("{:.2}", metrics.daily_pnl_usd()),
         balance_usd: format!("{:.2}", balance_usd),
@@ -155,7 +189,8 @@ pub async fn metrics_handler(State(state): State<Arc<HealthState>>) -> String {
          # HELP polybot_max_latency_us Maximum execution latency in microseconds\n# TYPE polybot_max_latency_us gauge\npolybot_max_latency_us {}\n\
          # HELP polybot_emergency_stops_total Emergency stops triggered\n# TYPE polybot_emergency_stops_total counter\npolybot_emergency_stops_total {}\n\
          # HELP polybot_health Bot health (1=ok, 0=error)\n# TYPE polybot_health gauge\npolybot_health {}\n\
-         # HELP polybot_ws_connected WebSocket connection (1=connected)\n# TYPE polybot_ws_connected gauge\npolybot_ws_connected {}\n",
+         # HELP polybot_ws_connected WebSocket connection (1=connected)\n# TYPE polybot_ws_connected gauge\npolybot_ws_connected {}\n\
+         # HELP polybot_data_api_latency_ms Data API latency in milliseconds\n# TYPE polybot_data_api_latency_ms gauge\npolybot_data_api_latency_ms {}\n",
         uptime,
         m.signals_received.load(std::sync::atomic::Ordering::Relaxed),
         m.signals_processed.load(std::sync::atomic::Ordering::Relaxed),
@@ -172,6 +207,7 @@ pub async fn metrics_handler(State(state): State<Arc<HealthState>>) -> String {
         m.emergency_stops_triggered.load(std::sync::atomic::Ordering::Relaxed),
          if m.is_paused() || state.paused { 0 } else { 1 },
          m.ws_connected.load(std::sync::atomic::Ordering::Relaxed),
+         m.data_api_latency_ms.load(std::sync::atomic::Ordering::Relaxed),
     )
 }
 
@@ -207,6 +243,31 @@ pub async fn executions_handler(
         Ok(store) => Json(store.latest_trades(limit).unwrap_or_default()),
         Err(_) => Json(Vec::new()),
     }
+}
+
+pub async fn daily_stats_handler(
+    State(state): State<Arc<HealthState>>,
+    Query(query): Query<DailyStatsQuery>,
+) -> Json<DailyStatsResponse> {
+    let days = query.days.unwrap_or(7);
+    Json(match SqliteStore::open(std::path::Path::new(&state.sqlite_path)) {
+        Ok(store) => {
+            let rows = store.get_recent_daily_stats(days).unwrap_or_default();
+            DailyStatsResponse {
+                entries: rows.into_iter().map(|r| DailyStatsEntry {
+                    date: r.date,
+                    realized_pnl: r.realized_pnl.to_string(),
+                    unrealized_pnl: r.unrealized_pnl.to_string(),
+                    volume_traded: r.volume_traded.to_string(),
+                    trades_placed: r.trades_placed,
+                    trades_filled: r.trades_filled,
+                    trades_rejected: r.trades_rejected,
+                    drawdown_pct: r.drawdown_pct.to_string(),
+                }).collect(),
+            }
+        }
+        Err(_) => DailyStatsResponse { entries: Vec::new() },
+    })
 }
 
 pub async fn pause_handler(
@@ -275,6 +336,25 @@ pub async fn dashboard_handler() -> Html<&'static str> {
     Html(DASHBOARD_HTML)
 }
 
+pub async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<HealthState>>,
+) -> axum::response::Response {
+    ws.on_upgrade(move |mut socket| async move {
+        let mut rx = state.event_tx.subscribe();
+        loop {
+            match rx.recv().await {
+                Ok(msg) => {
+                    if socket.send(WsMessage::Text(msg.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    })
+}
+
 pub fn create_health_router(state: Arc<HealthState>) -> Router {
     Router::new()
         .route("/", get(dashboard_handler))
@@ -284,6 +364,8 @@ pub fn create_health_router(state: Arc<HealthState>) -> Router {
         .route("/positions", get(positions_handler))
         .route("/signals", get(signals_handler))
         .route("/executions", get(executions_handler))
+        .route("/daily", get(daily_stats_handler))
+        .route("/ws", get(ws_handler))
         .route("/control/pause", post(pause_handler))
         .route("/control/resume", post(resume_handler))
         .route("/control/emergency-stop", post(emergency_stop_handler))

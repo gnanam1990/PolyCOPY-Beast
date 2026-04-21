@@ -1,5 +1,7 @@
 use leptos::prelude::*;
 use leptos_meta::*;
+use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
 use crate::data::{self, HealthData, MetricsData, PositionData, SignalData};
 
 #[component]
@@ -17,6 +19,28 @@ pub fn App() -> impl IntoView {
                 gloo_timers::future::sleep(std::time::Duration::from_secs(5)).await;
                 refresh_clone.update(|n| *n += 1);
             }
+        });
+    });
+
+    // v3.0: WebSocket event stream for real-time updates
+    Effect::new(move |_| {
+        let refresh_clone = refresh;
+        wasm_bindgen_futures::spawn_local(async move {
+            let window = gloo_utils::window();
+            let Ok(host) = window.location().host() else { return; };
+            let Ok(proto) = window.location().protocol() else { return; };
+            let proto = if proto == "https:" { "wss" } else { "ws" };
+            let Ok(ws) = web_sys::WebSocket::new(&format!("{}://{}/ws", proto, host)) else { return; };
+            let onmessage = Closure::<dyn FnMut(web_sys::MessageEvent)>::new({
+                let refresh = refresh_clone;
+                move |e: web_sys::MessageEvent| {
+                    if e.data().as_string().is_some() {
+                        refresh.update(|n| *n += 1);
+                    }
+                }
+            });
+            ws.set_onmessage(Some(onmessage.as_ref().dyn_ref().unwrap()));
+            onmessage.forget();
         });
     });
 
@@ -154,6 +178,12 @@ fn DashboardTab(
     let (toast_msg, set_toast_msg) = signal(String::new());
     let (toast_ok, set_toast_ok) = signal(true);
 
+    let daily_stats_res = LocalResource::new(move || {
+        let _ = refresh.get();
+        async move { data::fetch_daily_stats().await.unwrap_or_default() }
+    });
+    let stats_sig = Signal::derive(move || daily_stats_res.get().as_deref().cloned().unwrap_or_default());
+
     let pause_action = Action::new_local(move |_: &()| {
         async move {
             match gloo_net::http::Request::post("/health/control/pause").send().await {
@@ -282,6 +312,16 @@ fn DashboardTab(
                                 <span class="health-value" style={if rpc == "healthy" { "color: var(--success)" } else { "color: var(--danger)" }}>{rpc.clone()}</span>
                             </div>
                             <div class="health-item">
+                                <span class="health-label">"Data API Latency"</span>
+                                <span class="health-value" style="font-family: var(--font-mono);">
+                                    {move || {
+                                        let ms = health.get().map(|h| h.data_api_latency_ms).unwrap_or(0);
+                                        let color = if ms > 2000 { "var(--danger)" } else if ms > 1000 { "var(--warning)" } else { "var(--success)" };
+                                        view! { <span style={format!("color: {}", color)}>{format!("{} ms", ms)}</span> }
+                                    }}
+                                </span>
+                            </div>
+                            <div class="health-item">
                                 <span class="health-label">"Last Signal"</span>
                                 <span class="health-value" style="font-family: var(--font-mono); font-size: 0.8rem;">{last}</span>
                             </div>
@@ -292,6 +332,21 @@ fn DashboardTab(
                             <div class="health-item">
                                 <span class="health-label">"Emergency Stops"</span>
                                 <span class="health-value" style={if stops > 0 { "color: var(--danger)" } else { "" }}>{stops.to_string()}</span>
+                            </div>
+                            <div class="health-item">
+                                <span class="health-label">"Execution Latency"</span>
+                                <span class="health-value">
+                                    {move || {
+                                        let m = metrics.get();
+                                        let avg = m.as_ref().map(|v| v.avg_latency_us).unwrap_or(0);
+                                        let max = m.as_ref().map(|v| v.max_latency_us).unwrap_or(0);
+                                        view! {
+                                            <span style="font-family: var(--font-mono); color: var(--text-secondary);">
+                                                {format!("avg {:} µs / max {:} µs", avg, max)}
+                                            </span>
+                                        }
+                                    }}
+                                </span>
                             </div>
                             <div class="health-item">
                                 <span class="health-label">"Drawdown"</span>
@@ -353,6 +408,54 @@ fn DashboardTab(
                             <p>"Metrics unavailable"</p>
                         </div>
                     }.into_any()
+                }}
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">"Daily Stats"</span>
+                    <div class="card-icon blue">"◈"</div>
+                </div>
+                {move || {
+                    let entries = stats_sig.get();
+                    if entries.is_empty() {
+                        view! {
+                            <div class="empty-state">
+                                <span style="font-size: 1.5rem; opacity: 0.3;">"◈"</span>
+                                <p>"No daily history yet"</p>
+                            </div>
+                        }.into_any()
+                    } else {
+                        let max_pnl: f64 = entries.iter()
+                            .filter_map(|e| e.realized_pnl.parse::<f64>().ok())
+                            .map(|v| v.abs())
+                            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                            .unwrap_or(1.0)
+                            .max(1.0);
+                        view! {
+                            <div class="health-grid">
+                                {
+                                    entries.iter().map(|e| {
+                                        let pnl: f64 = e.realized_pnl.parse().unwrap_or(0.0);
+                                        let pct = (pnl.abs() / max_pnl * 100.0).min(100.0);
+                                        let color = if pnl >= 0.0 { "var(--success)" } else { "var(--danger)" };
+                                        let bar_style = format!("width: {:.0}%; height: 6px; background: {}; border-radius: 3px; margin-top: 4px;", pct, color);
+                                        view! {
+                                            <div class="health-item" style="flex-direction: column; align-items: flex-start;">
+                                                <div style="display: flex; justify-content: space-between; width: 100%;">
+                                                    <span class="health-label" style="font-size: 0.75rem;">{e.date.clone()}</span>
+                                                    <span class="health-value" style={format!("font-size: 0.8rem; color: {}", color)}>{format!("${:.2}", pnl)}</span>
+                                                </div>
+                                                <div style="width: 100%; background: rgba(255,255,255,0.05); border-radius: 3px;">
+                                                    <div style={bar_style}></div>
+                                                </div>
+                                            </div>
+                                        }
+                                    }).collect_view()
+                                }
+                            </div>
+                        }.into_any()
+                    }
                 }}
             </div>
 

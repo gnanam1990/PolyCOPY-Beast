@@ -110,7 +110,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (trade_tx, trade_rx) = mpsc::channel(128);
     let (wallet_trigger_tx, wallet_trigger_rx) = mpsc::channel(256);
 
-    // Health state — now backed by shared Metrics
+    // Health state — now backed by shared Metrics and event broadcast
+    let (event_tx, _event_rx) = tokio::sync::broadcast::channel(256);
+    metrics.set_event_tx(event_tx.clone());
     let health_state = Arc::new(health::HealthState {
         start_time: SystemTime::now(),
         simulation_mode: config.system.simulation,
@@ -124,6 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         risk_engine: risk_engine.clone(),
         position_manager: position_manager.clone(),
+        event_tx: event_tx.clone(),
     });
 
     // Spawn dedup filter task
@@ -143,8 +146,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let poller_risk = risk_engine.clone();
     let poller_signal_tx = raw_signal_tx.clone();
     let poller_state = wallet_activity_state.clone();
+    let poller_metrics = metrics.clone();
     let poller_handle = tokio::spawn(async move {
-        match scanner::data_api::DataApiPoller::new(&poller_config, poller_state) {
+        match scanner::data_api::DataApiPoller::new(&poller_config, poller_state, poller_metrics) {
             Ok(poller) => {
                 if let Err(e) = poller.run(poller_risk, poller_signal_tx, wallet_trigger_rx).await {
                     tracing::error!(error = %e, "Data API poller failed");
