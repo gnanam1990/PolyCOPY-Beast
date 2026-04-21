@@ -47,6 +47,16 @@ pub struct PersistedPositionRow {
     pub last_updated: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketMetadataRow {
+    pub condition_id: String,
+    pub question: Option<String>,
+    pub slug: Option<String>,
+    pub icon: Option<String>,
+    pub resolved: bool,
+    pub fetched_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DailyStatsRow {
     pub date: String,
@@ -199,7 +209,15 @@ impl SqliteStore {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-             );",
+             );
+             CREATE TABLE IF NOT EXISTS market_metadata (
+                condition_id TEXT PRIMARY KEY,
+                question TEXT,
+                slug TEXT,
+                icon TEXT,
+                resolved INTEGER NOT NULL DEFAULT 0,
+                fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );",
             )
             .map_err(|e| PolybotError::State(format!("Failed to create tables: {}", e)))?;
         Ok(())
@@ -422,6 +440,53 @@ impl SqliteStore {
 
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| PolybotError::State(format!("Failed to read open positions: {}", e)))
+    }
+
+    pub fn get_market_metadata(&self,
+        condition_id: &str,
+    ) -> Result<Option<MarketMetadataRow>, PolybotError> {
+        use rusqlite::OptionalExtension as _;
+        self.conn
+            .query_row(
+                "SELECT condition_id, question, slug, icon, resolved, fetched_at FROM market_metadata WHERE condition_id = ?1",
+                [condition_id.to_lowercase()],
+                |row| {
+                    Ok(MarketMetadataRow {
+                        condition_id: row.get(0)?,
+                        question: row.get(1)?,
+                        slug: row.get(2)?,
+                        icon: row.get(3)?,
+                        resolved: row.get::<_, i64>(4)? == 1,
+                        fetched_at: row.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| PolybotError::State(format!("Failed to get market metadata: {}", e)))
+    }
+
+    pub fn upsert_market_metadata(
+        &self,
+        row: &MarketMetadataRow,
+    ) -> Result<(), PolybotError> {
+        self.conn.execute(
+            "INSERT INTO market_metadata (condition_id, question, slug, icon, resolved, fetched_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)
+             ON CONFLICT(condition_id) DO UPDATE SET
+                question = excluded.question,
+                slug = excluded.slug,
+                icon = excluded.icon,
+                resolved = excluded.resolved,
+                fetched_at = CURRENT_TIMESTAMP",
+            rusqlite::params![
+                row.condition_id.to_lowercase(),
+                row.question,
+                row.slug,
+                row.icon,
+                if row.resolved { 1 } else { 0 },
+            ],
+        ).map_err(|e| PolybotError::State(format!("Failed to upsert market metadata: {}", e)))?;
+        Ok(())
     }
 
     pub fn lookup_signal_wallet(&self, signal_id: &str) -> Result<Option<String>, PolybotError> {

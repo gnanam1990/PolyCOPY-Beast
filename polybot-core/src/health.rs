@@ -214,14 +214,72 @@ pub async fn metrics_handler(State(state): State<Arc<HealthState>>) -> String {
 pub struct PositionResponse {
     pub id: String,
     pub market_id: String,
+    pub market_name: Option<String>,
     pub side: String,
     pub entry_price: String,
     pub average_price: String,
     pub current_size: String,
     pub current_price: Option<String>,
+    pub price_is_live: bool,
     pub opened_at: String,
     pub status: String,
     pub category: String,
+}
+
+async fn resolve_market_name(sqlite_path: &str, condition_id: &str) -> Option<String> {
+    // Check SQLite cache first
+    if let Ok(store) = SqliteStore::open(std::path::Path::new(sqlite_path)) {
+        if let Ok(Some(meta)) = store.get_market_metadata(condition_id) {
+            return meta.question;
+        }
+    }
+
+    // Fetch from Polymarket Gamma API
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+
+    let url = format!(
+        "https://gamma-api.polymarket.com/markets?limit=1&conditionIds={}",
+        condition_id
+    );
+
+    match client.get(&url).send().await {
+        Ok(resp) => {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if let Some(markets) = json.as_array() {
+                    if let Some(market) = markets.first() {
+                        let question = market.get("question").and_then(|q| q.as_str()).map(|s| s.to_string());
+                        let slug = market.get("slug").and_then(|q| q.as_str()).map(|s| s.to_string());
+                        let icon = market.get("icon").and_then(|q| q.as_str()).map(|s| s.to_string());
+                        let resolved = market.get("resolved").and_then(|q| q.as_bool()).unwrap_or(false);
+
+                        if let Some(ref q) = question {
+                            if let Ok(store) = SqliteStore::open(std::path::Path::new(sqlite_path)) {
+                                let _ = store.upsert_market_metadata(&crate::state::sqlite::MarketMetadataRow {
+                                    condition_id: condition_id.to_string(),
+                                    question: Some(q.clone()),
+                                    slug,
+                                    icon,
+                                    resolved,
+                                    fetched_at: chrono::Utc::now().to_rfc3339(),
+                                });
+                            }
+                        }
+                        return question;
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, condition_id, "Failed to fetch market metadata from Gamma API");
+        }
+    }
+    None
 }
 
 pub async fn positions_handler(
@@ -229,20 +287,29 @@ pub async fn positions_handler(
 ) -> Json<Vec<PositionResponse>> {
     match SqliteStore::open(std::path::Path::new(&state.sqlite_path)) {
         Ok(store) => match store.list_open_positions() {
-            Ok(rows) if !rows.is_empty() => Json(
-                rows.into_iter().map(|row| PositionResponse {
-                    id: row.position.id,
-                    market_id: row.position.market_id,
-                    side: format!("{:?}", row.position.side),
-                    entry_price: row.position.entry_price.to_string(),
-                    average_price: row.position.average_price.to_string(),
-                    current_size: row.position.current_size.to_string(),
-                    current_price: row.current_price.map(|v| v.to_string()),
-                    opened_at: row.position.opened_at.to_rfc3339(),
-                    status: format!("{:?}", row.position.status),
-                    category: row.position.category.to_string(),
-                }).collect()
-            ),
+            Ok(rows) => {
+                let mut out = Vec::new();
+                let path = state.sqlite_path.clone();
+                for row in rows {
+                    let market_name = resolve_market_name(&path, &row.position.market_id).await;
+                    let has_live_price = row.current_price.is_some();
+                    out.push(PositionResponse {
+                        id: row.position.id,
+                        market_id: row.position.market_id,
+                        market_name,
+                        side: format!("{:?}", row.position.side),
+                        entry_price: row.position.entry_price.to_string(),
+                        average_price: row.position.average_price.to_string(),
+                        current_size: row.position.current_size.to_string(),
+                        current_price: row.current_price.map(|v| v.to_string()),
+                        price_is_live: has_live_price,
+                        opened_at: row.position.opened_at.to_rfc3339(),
+                        status: format!("{:?}", row.position.status),
+                        category: row.position.category.to_string(),
+                    });
+                }
+                Json(out)
+            }
             _ => Json(Vec::new()),
         },
         Err(_) => Json(Vec::new()),

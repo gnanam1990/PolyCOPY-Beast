@@ -587,17 +587,41 @@ fn PositionsTable(data: Signal<Vec<PositionData>>) -> impl IntoView {
                                     } else {
                                         view! { <span class="tag tag-closed">{p.status}</span> }.into_any()
                                     };
+                                    let market_display = if let Some(ref name) = p.market_name {
+                                        let (disp, url) = market_link(&p.market_id);
+                                        view! {
+                                            <div style="display: flex; flex-direction: column; gap: 2px;">
+                                                <span style="font-weight: 600; color: var(--text-primary);">{name.clone()}</span>
+                                                <a href={url} target="_blank" style="font-size: 0.7rem; color: var(--text-tertiary); text-decoration: none; font-family: var(--font-mono);">{disp}</a>
+                                            </div>
+                                        }.into_any()
+                                    } else {
+                                        let (disp, url) = market_link(&p.market_id);
+                                        view! { <a href={url} target="_blank" style="color: var(--accent); text-decoration: none;">{disp}</a> }.into_any()
+                                    };
+                                    let price_display = if let Some(ref cp) = p.current_price {
+                                        let color = if p.price_is_live { "var(--success)" } else { "var(--text-secondary)" };
+                                        view! {
+                                            <span style={format!("font-family: var(--font-mono); color: {}; font-size: 0.85rem;", color)}>
+                                                {cp.clone()}
+                                                {if p.price_is_live { view! { <span style="font-size: 0.6rem; margin-left: 4px; opacity: 0.5;">"●"</span> }.into_any() } else { view! { <span style="font-size: 0.6rem; margin-left: 4px; opacity: 0.5; color: var(--warning);">"sim"</span> }.into_any() }}
+                                            </span>
+                                        }.into_any()
+                                    } else {
+                                        // Fallback to entry_price dimmed
+                                        view! {
+                                            <span style="font-family: var(--font-mono); color: var(--text-tertiary); font-size: 0.85rem;">
+                                                {p.entry_price.clone()}
+                                                <span style="font-size: 0.6rem; margin-left: 4px; opacity: 0.5; color: var(--warning);">"sim"</span>
+                                            </span>
+                                        }.into_any()
+                                    };
                                     view! {
                                         <tr class="fade-in">
-                                            <td style="font-weight: 600;">
-                                                {
-                                                    let (disp, url) = market_link(&p.market_id);
-                                                    view! { <a href={url} target="_blank" style="color: var(--accent); text-decoration: none;">{disp}</a> }.into_any()
-                                                }
-                                            </td>
+                                            <td style="max-width: 220px; overflow: hidden; text-overflow: ellipsis;">{market_display}</td>
                                             <td>{side_tag}</td>
                                             <td class="td-mono">{p.average_price}</td>
-                                            <td class="td-mono">{p.current_price.unwrap_or_else(|| "-".into())}</td>
+                                            <td class="td-mono">{price_display}</td>
                                             <td class="td-mono">{p.current_size}</td>
                                             <td>{cat_tag}</td>
                                             <td>{status_tag}</td>

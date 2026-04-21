@@ -37,9 +37,12 @@ pub struct MetricsData {
 pub struct PositionData {
     pub id: String,
     pub market_id: String,
+    pub market_name: Option<String>,
     pub side: String,
+    pub entry_price: String,
     pub average_price: String,
     pub current_price: Option<String>,
+    pub price_is_live: bool,
     pub current_size: String,
     pub category: String,
     pub status: String,
