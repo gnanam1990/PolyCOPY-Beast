@@ -77,6 +77,16 @@ fn api_path(path: &str) -> String {
     path.to_string()
 }
 
+pub fn market_link(market_id: &str) -> (String, String) {
+    let display = if market_id.len() > 12 {
+        format!("{}...{}", &market_id[..6], &market_id[market_id.len() - 4..])
+    } else {
+        market_id.to_string()
+    };
+    let url = format!("https://polymarket.com/market/{}", market_id);
+    (display, url)
+}
+
 pub async fn fetch_health() -> Result<HealthData, String> {
     let url = api_path("/health");
     gloo_net::http::Request::get(&url)

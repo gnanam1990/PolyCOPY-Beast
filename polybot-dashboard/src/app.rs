@@ -2,7 +2,7 @@ use leptos::prelude::*;
 use leptos_meta::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
-use crate::data::{self, HealthData, MetricsData, PositionData, SignalData};
+use crate::data::{self, HealthData, MetricsData, PositionData, SignalData, market_link};
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -316,11 +316,14 @@ fn DashboardTab(
                             </div>
                             <div class="health-item">
                                 <span class="health-label">"Data API Latency"</span>
-                                <span class="health-value" style="font-family: var(--font-mono);">
+                                <span class="health-value" style={{
+                                    let ms = health.get().map(|h| h.data_api_latency_ms).unwrap_or(0);
+                                    let color = if ms > 2000 { "var(--danger)" } else if ms > 1000 { "var(--warning)" } else { "var(--success)" };
+                                    format!("font-family: var(--font-mono); color: {};", color)
+                                }}>
                                     {move || {
                                         let ms = health.get().map(|h| h.data_api_latency_ms).unwrap_or(0);
-                                        let color = if ms > 2000 { "var(--danger)" } else if ms > 1000 { "var(--warning)" } else { "var(--success)" };
-                                        view! { <span style={format!("color: {}", color)}>{format!("{} ms", ms)}</span> }
+                                        format!("{} ms", ms)
                                     }}
                                 </span>
                             </div>
@@ -585,7 +588,12 @@ fn PositionsTable(data: Signal<Vec<PositionData>>) -> impl IntoView {
                                     };
                                     view! {
                                         <tr class="fade-in">
-                                            <td style="font-weight: 600;">{p.market_id}</td>
+                                            <td style="font-weight: 600;">
+                                                {
+                                                    let (disp, url) = market_link(&p.market_id);
+                                                    view! { <a href={url} target="_blank" style="color: var(--accent); text-decoration: none;">{disp}</a> }.into_any()
+                                                }
+                                            </td>
                                             <td>{side_tag}</td>
                                             <td class="td-mono">{p.average_price}</td>
                                             <td class="td-mono">{p.current_size}</td>
@@ -649,7 +657,12 @@ fn SignalsTable(data: Signal<Vec<SignalData>>) -> impl IntoView {
                                     };
                                     view! {
                                         <tr class="fade-in">
-                                            <td style="font-weight: 600;">{s.market_id}</td>
+                                            <td style="font-weight: 600;">
+                                                {
+                                                    let (disp, url) = market_link(&s.market_id);
+                                                    view! { <a href={url} target="_blank" style="color: var(--accent); text-decoration: none;">{disp}</a> }.into_any()
+                                                }
+                                            </td>
                                             <td>{side_tag}</td>
                                             <td class="td-mono">{s.confidence.to_string()}</td>
                                             <td class="td-mono">{s.secret_level.to_string()}</td>
