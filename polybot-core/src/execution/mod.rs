@@ -158,14 +158,18 @@ pub async fn run_execution_engine(
                                 }
                             };
 
-                            let midpoint =
-                                clob_client::ClobClient::calculate_midpoint(&book).unwrap_or(target_price);
+                            let (midpoint, has_real_price) = match clob_client::ClobClient::calculate_midpoint(&book) {
+                                Some(mp) => (mp, true),
+                                None => (target_price, false),
+                            };
                             let estimated_fill =
                                 clob_client::ClobClient::estimate_fill_price(&book).unwrap_or(midpoint);
-                            market_prices
-                                .write()
-                                .await
-                                .insert(decision.market_id.clone(), midpoint);
+                            if has_real_price {
+                                market_prices
+                                    .write()
+                                    .await
+                                    .insert(decision.market_id.clone(), midpoint);
+                            }
 
                             if !clob_client::ClobClient::check_slippage(
                                 midpoint,

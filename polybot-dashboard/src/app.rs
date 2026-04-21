@@ -599,16 +599,24 @@ fn PositionsTable(data: Signal<Vec<PositionData>>) -> impl IntoView {
                                         let (disp, url) = market_link(&p.market_id);
                                         view! { <a href={url} target="_blank" style="color: var(--accent); text-decoration: none;">{disp}</a> }.into_any()
                                     };
-                                    let price_display = if let Some(ref cp) = p.current_price {
-                                        let color = if p.price_is_live { "var(--success)" } else { "var(--text-secondary)" };
-                                        view! {
-                                            <span style={format!("font-family: var(--font-mono); color: {}; font-size: 0.85rem;", color)}>
-                                                {cp.clone()}
-                                                {if p.price_is_live { view! { <span style="font-size: 0.6rem; margin-left: 4px; opacity: 0.5;">"●"</span> }.into_any() } else { view! { <span style="font-size: 0.6rem; margin-left: 4px; opacity: 0.5; color: var(--warning);">"sim"</span> }.into_any() }}
-                                            </span>
-                                        }.into_any()
+                                    let price_display = if p.price_is_live {
+                                        if let Some(ref cp) = p.current_price {
+                                            view! {
+                                                <span style="font-family: var(--font-mono); color: var(--success); font-size: 0.85rem;">
+                                                    {cp.clone()}
+                                                    <span style="font-size: 0.6rem; margin-left: 4px; opacity: 0.5;">"●"</span>
+                                                </span>
+                                            }.into_any()
+                                        } else {
+                                            view! {
+                                                <span style="font-family: var(--font-mono); color: var(--text-tertiary); font-size: 0.85rem;">
+                                                    {p.entry_price.clone()}
+                                                    <span style="font-size: 0.6rem; margin-left: 4px; opacity: 0.5; color: var(--warning);">"sim"</span>
+                                                </span>
+                                            }.into_any()
+                                        }
                                     } else {
-                                        // Fallback to entry_price dimmed
+                                        // No live price: show entry_price with sim label
                                         view! {
                                             <span style="font-family: var(--font-mono); color: var(--text-tertiary); font-size: 0.85rem;">
                                                 {p.entry_price.clone()}

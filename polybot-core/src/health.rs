@@ -253,6 +253,17 @@ async fn resolve_market_name(sqlite_path: &str, condition_id: &str) -> Option<St
             if let Ok(json) = resp.json::<serde_json::Value>().await {
                 if let Some(markets) = json.as_array() {
                     if let Some(market) = markets.first() {
+                        // Validate API returned the CORRECT condition_id, not a fallback
+                        let returned_condition_id = market.get("conditionId").and_then(|q| q.as_str());
+                        if returned_condition_id != Some(condition_id) {
+                            tracing::debug!(
+                                requested = %condition_id,
+                                returned = ?returned_condition_id,
+                                "Gamma API returned fallback market; skipping cache"
+                            );
+                            return None;
+                        }
+
                         let question = market.get("question").and_then(|q| q.as_str()).map(|s| s.to_string());
                         let slug = market.get("slug").and_then(|q| q.as_str()).map(|s| s.to_string());
                         let icon = market.get("icon").and_then(|q| q.as_str()).map(|s| s.to_string());
@@ -292,7 +303,9 @@ pub async fn positions_handler(
                 let path = state.sqlite_path.clone();
                 for row in rows {
                     let market_name = resolve_market_name(&path, &row.position.market_id).await;
-                    let has_live_price = row.current_price.is_some();
+                    let has_live_price = row.current_price.is_some()
+                        && !state.simulation_mode
+                        && row.current_price.map(|p| p != Decimal::new(50, 2)).unwrap_or(false);
                     out.push(PositionResponse {
                         id: row.position.id,
                         market_id: row.position.market_id,
