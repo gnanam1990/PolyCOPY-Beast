@@ -1104,4 +1104,49 @@ mod migration_runner_tests {
             .unwrap();
         assert_eq!(initial, after, "idempotent re-run should not add rows");
     }
+
+    #[test]
+    fn transactions_table_exists_after_migrations() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='transactions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "transactions table missing");
+    }
+
+    #[test]
+    fn transactions_table_has_expected_columns() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut stmt = store
+            .conn
+            .prepare("PRAGMA table_info(transactions)")
+            .unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for required in [
+            "transaction_id",
+            "trade_id",
+            "type",
+            "state",
+            "submitted_at",
+            "confirmed_at",
+            "transaction_hash",
+            "error_msg",
+        ] {
+            assert!(
+                cols.iter().any(|c| c == required),
+                "missing column: {} (have {:?})",
+                required,
+                cols
+            );
+        }
+    }
 }

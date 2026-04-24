@@ -21,4 +21,24 @@ pub const MIGRATIONS: &[Migration] = &[
         // run in order.
         sql: "SELECT 1;",
     },
+    Migration {
+        version: 2,
+        description: "V2: add transactions table for async relayer tracking",
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS transactions (
+                transaction_id   TEXT PRIMARY KEY,
+                trade_id         TEXT REFERENCES trades(id),
+                type             TEXT NOT NULL,
+                state            TEXT NOT NULL,
+                submitted_at     TEXT NOT NULL,
+                confirmed_at     TEXT,
+                transaction_hash TEXT,
+                error_msg        TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_transactions_state
+                ON transactions(state);
+            CREATE INDEX IF NOT EXISTS idx_transactions_trade_id
+                ON transactions(trade_id);
+        "#,
+    },
 ];
