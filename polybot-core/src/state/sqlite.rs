@@ -143,6 +143,8 @@ impl SqliteStore {
     pub fn open(db_path: &Path) -> Result<Self, PolybotError> {
         let conn = rusqlite::Connection::open(db_path)
             .map_err(|e| PolybotError::State(format!("Failed to open SQLite: {}", e)))?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(|e| PolybotError::State(format!("Failed to enable FK enforcement: {}", e)))?;
         let store = Self { conn };
         store.create_tables()?;
         Ok(store)
@@ -151,6 +153,8 @@ impl SqliteStore {
     pub fn open_in_memory() -> Result<Self, PolybotError> {
         let conn = rusqlite::Connection::open_in_memory()
             .map_err(|e| PolybotError::State(format!("Failed to open in-memory SQLite: {}", e)))?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(|e| PolybotError::State(format!("Failed to enable FK enforcement: {}", e)))?;
         let store = Self { conn };
         store.create_tables()?;
         Ok(store)
@@ -279,6 +283,7 @@ impl SqliteStore {
         self.ensure_column("signals", "direction", "TEXT NOT NULL DEFAULT 'Buy'")?;
         self.ensure_column("trades", "source_wallet", "TEXT NOT NULL DEFAULT ''")?;
         self.ensure_column("trades", "direction", "TEXT NOT NULL DEFAULT 'Buy'")?;
+        self.run_migrations()?;
         Ok(())
     }
 
@@ -315,10 +320,74 @@ impl SqliteStore {
         Ok(())
     }
 
+    fn run_migrations(&self) -> Result<(), PolybotError> {
+        use crate::state::migrations::MIGRATIONS;
+
+        let current: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| PolybotError::State(format!("Failed to read schema_migrations: {}", e)))?;
+
+        for migration in MIGRATIONS.iter().filter(|m| m.version > current) {
+            tracing::info!(
+                version = migration.version,
+                description = migration.description,
+                "Applying schema migration"
+            );
+            let tx = self.conn.unchecked_transaction().map_err(|e| {
+                PolybotError::State(format!(
+                    "Failed to begin migration v{} ({}) transaction: {}",
+                    migration.version, migration.description, e
+                ))
+            })?;
+            tx.execute_batch(migration.sql).map_err(|e| {
+                PolybotError::State(format!(
+                    "Migration v{} ({}) failed: {}",
+                    migration.version, migration.description, e
+                ))
+            })?;
+            tx.execute(
+                "INSERT INTO schema_migrations (version) VALUES (?1)",
+                [migration.version],
+            )
+            .map_err(|e| {
+                PolybotError::State(format!(
+                    "Failed to record schema_migrations v{}: {}",
+                    migration.version, e
+                ))
+            })?;
+            tx.commit().map_err(|e| {
+                PolybotError::State(format!(
+                    "Failed to commit migration v{} ({}): {}",
+                    migration.version, migration.description, e
+                ))
+            })?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn run_migrations_for_test(&self) -> Result<(), PolybotError> {
+        self.run_migrations()
+    }
+
     pub fn insert_trade(&self, trade: &Trade) -> Result<(), PolybotError> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO trades (id, signal_id, source_wallet, market_id, category, side, direction, price, size, size_usd, filled_size, order_type, status, placed_at, filled_at, simulated)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            "INSERT OR REPLACE INTO trades (
+                id, signal_id, source_wallet, market_id, category, side, direction, price, size,
+                size_usd, filled_size, order_type, status, placed_at, filled_at, simulated,
+                transaction_id, transaction_hash, relayer_state,
+                taker_fee_bps, fee_paid_usdc, rebate_usdc, retry_count, error_msg
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
+                ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                ?17, ?18, ?19,
+                ?20, ?21, ?22, ?23, ?24
+            )",
             rusqlite::params![
                 trade.id,
                 trade.signal_id,
@@ -336,6 +405,14 @@ impl SqliteStore {
                 trade.placed_at.to_rfc3339(),
                 trade.filled_at.map(|t| t.to_rfc3339()),
                 trade.simulated as i32,
+                trade.transaction_id,
+                trade.transaction_hash,
+                trade.relayer_state.map(|s| s.as_sqlite_str().to_string()),
+                trade.taker_fee_bps as i64,
+                trade.fee_paid_usdc.to_string(),
+                trade.rebate_usdc.to_string(),
+                trade.retry_count as i64,
+                trade.error_msg,
             ],
         ).map_err(|e| PolybotError::State(format!("Failed to insert trade: {}", e)))?;
         Ok(())
@@ -947,6 +1024,162 @@ impl SqliteStore {
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| PolybotError::State(format!("Failed to read signals: {}", e)))
     }
+
+    pub fn insert_transaction(
+        &self,
+        rec: &polybot_common::types::TransactionRecord,
+    ) -> Result<(), PolybotError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO transactions
+                (transaction_id, trade_id, type, state, submitted_at, confirmed_at, transaction_hash, error_msg)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                rec.transaction_id,
+                rec.trade_id,
+                rec.kind.as_sqlite_str(),
+                rec.state.as_sqlite_str(),
+                rec.submitted_at.to_rfc3339(),
+                rec.confirmed_at.map(|t| t.to_rfc3339()),
+                rec.transaction_hash,
+                rec.error_msg,
+            ],
+        )
+        .map_err(|e| PolybotError::State(format!("Failed to insert transaction: {}", e)))?;
+        Ok(())
+    }
+
+    pub fn update_transaction_state(
+        &self,
+        transaction_id: &str,
+        state: polybot_common::types::TransactionState,
+        transaction_hash: Option<&str>,
+        error_msg: Option<&str>,
+    ) -> Result<(), PolybotError> {
+        let confirmed_at = if state.is_terminal() {
+            Some(chrono::Utc::now().to_rfc3339())
+        } else {
+            None
+        };
+        self.conn.execute(
+            "UPDATE transactions
+             SET state = ?2,
+                 confirmed_at = COALESCE(?3, confirmed_at),
+                 transaction_hash = COALESCE(?4, transaction_hash),
+                 error_msg = COALESCE(?5, error_msg)
+             WHERE transaction_id = ?1",
+            rusqlite::params![
+                transaction_id,
+                state.as_sqlite_str(),
+                confirmed_at,
+                transaction_hash,
+                error_msg,
+            ],
+        )
+        .map_err(|e| PolybotError::State(format!("Failed to update transaction state: {}", e)))?;
+        Ok(())
+    }
+
+    pub fn get_transaction(
+        &self,
+        transaction_id: &str,
+    ) -> Result<Option<polybot_common::types::TransactionRecord>, PolybotError> {
+        use rusqlite::OptionalExtension as _;
+        self.conn
+            .query_row(
+                "SELECT transaction_id, trade_id, type, state, submitted_at, confirmed_at, transaction_hash, error_msg
+                 FROM transactions WHERE transaction_id = ?1",
+                [transaction_id],
+                Self::row_to_transaction_record,
+            )
+            .optional()
+            .map_err(|e| PolybotError::State(format!("Failed to query transaction: {}", e)))
+    }
+
+    pub fn list_non_terminal_transactions(
+        &self,
+    ) -> Result<Vec<polybot_common::types::TransactionRecord>, PolybotError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT transaction_id, trade_id, type, state, submitted_at, confirmed_at, transaction_hash, error_msg
+                 FROM transactions
+                 WHERE state NOT IN ('STATE_SUCCESS', 'STATE_FAILED')
+                 ORDER BY submitted_at ASC",
+            )
+            .map_err(|e| PolybotError::State(format!("Failed to prepare list-tx query: {}", e)))?;
+        let rows = stmt
+            .query_map([], Self::row_to_transaction_record)
+            .map_err(|e| PolybotError::State(format!("Failed to execute list-tx query: {}", e)))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| PolybotError::State(format!("Failed to collect tx rows: {}", e)))
+    }
+
+    fn row_to_transaction_record(
+        row: &rusqlite::Row<'_>,
+    ) -> rusqlite::Result<polybot_common::types::TransactionRecord> {
+        use polybot_common::types::{TransactionKind, TransactionRecord, TransactionState};
+        let kind_str: String = row.get(2)?;
+        let state_str: String = row.get(3)?;
+        let kind = match kind_str.as_str() {
+            "order" => TransactionKind::Order,
+            "cancel" => TransactionKind::Cancel,
+            "wrap" => TransactionKind::Wrap,
+            "approve" => TransactionKind::Approve,
+            "redeem" => TransactionKind::Redeem,
+            "deploy" => TransactionKind::Deploy,
+            other => {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    2,
+                    rusqlite::types::Type::Text,
+                    format!("unknown transaction kind: {}", other).into(),
+                ));
+            }
+        };
+        let state = match state_str.as_str() {
+            "STATE_NEW" => TransactionState::New,
+            "STATE_PENDING" => TransactionState::Pending,
+            "STATE_SUBMITTED" => TransactionState::Submitted,
+            "STATE_SUCCESS" => TransactionState::Success,
+            "STATE_FAILED" => TransactionState::Failed,
+            other => {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    3,
+                    rusqlite::types::Type::Text,
+                    format!("unknown transaction state: {}", other).into(),
+                ));
+            }
+        };
+        let submitted_at_str: String = row.get(4)?;
+        let submitted_at = chrono::DateTime::parse_from_rfc3339(&submitted_at_str)
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+                4,
+                rusqlite::types::Type::Text,
+                Box::new(e),
+            ))?
+            .with_timezone(&chrono::Utc);
+        let confirmed_at_str: Option<String> = row.get(5)?;
+        let confirmed_at = confirmed_at_str
+            .map(|s| {
+                chrono::DateTime::parse_from_rfc3339(&s)
+                    .map(|d| d.with_timezone(&chrono::Utc))
+            })
+            .transpose()
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+                5,
+                rusqlite::types::Type::Text,
+                Box::new(e),
+            ))?;
+        Ok(TransactionRecord {
+            transaction_id: row.get(0)?,
+            trade_id: row.get(1)?,
+            kind,
+            state,
+            submitted_at,
+            confirmed_at,
+            transaction_hash: row.get(6)?,
+            error_msg: row.get(7)?,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -981,6 +1214,14 @@ mod tests {
             placed_at: chrono::Utc::now(),
             filled_at: Some(chrono::Utc::now()),
             simulated: true,
+            transaction_id: None,
+            transaction_hash: None,
+            relayer_state: None,
+            taker_fee_bps: 0,
+            fee_paid_usdc: Decimal::ZERO,
+            rebate_usdc: Decimal::ZERO,
+            retry_count: 0,
+            error_msg: None,
         };
         store.insert_trade(&trade).unwrap();
         assert_eq!(store.get_trade_count().unwrap(), 1);
@@ -1075,6 +1316,7 @@ mod tests {
             resolved: false,
             redeemable: false,
             suggested_size_usdc: None,
+            fee_schedule: None,
             scanner_version: "1.0.0".to_string(),
         };
         store.insert_signal(&signal, "polling", "YES", "executed").unwrap();
@@ -1349,6 +1591,14 @@ mod tests {
             placed_at: chrono::Utc::now() - chrono::Duration::seconds(30),
             filled_at: Some(chrono::Utc::now() - chrono::Duration::seconds(20)),
             simulated: true,
+            transaction_id: None,
+            transaction_hash: None,
+            relayer_state: None,
+            taker_fee_bps: 0,
+            fee_paid_usdc: Decimal::ZERO,
+            rebate_usdc: Decimal::ZERO,
+            retry_count: 0,
+            error_msg: None,
         };
         let trade2 = Trade {
             id: "t2".to_string(),
@@ -1367,6 +1617,14 @@ mod tests {
             placed_at: chrono::Utc::now(),
             filled_at: Some(chrono::Utc::now()),
             simulated: false,
+            transaction_id: None,
+            transaction_hash: None,
+            relayer_state: None,
+            taker_fee_bps: 0,
+            fee_paid_usdc: Decimal::ZERO,
+            rebate_usdc: Decimal::ZERO,
+            retry_count: 0,
+            error_msg: None,
         };
 
         store.insert_trade(&trade1).unwrap();
@@ -1532,5 +1790,393 @@ mod tests {
         assert_eq!(signal.direction, "Buy");
         assert_eq!(trades[0].source_wallet, "");
         assert_eq!(trades[0].direction, "Buy");
+    }
+}
+
+#[cfg(test)]
+mod migration_runner_tests {
+    use super::SqliteStore;
+
+    #[test]
+    fn new_database_records_latest_migration_version() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let version: i64 = store
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), -1) FROM schema_migrations",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(version >= 0, "migration runner did not record any version");
+    }
+
+    #[test]
+    fn migrations_are_idempotent() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let initial: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
+            .unwrap();
+        store.run_migrations_for_test().expect("re-run should be no-op");
+        let after: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(initial, after, "idempotent re-run should not add rows");
+    }
+
+    #[test]
+    fn transactions_table_exists_after_migrations() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='transactions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "transactions table missing");
+    }
+
+    #[test]
+    fn transactions_table_has_expected_columns() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut stmt = store
+            .conn
+            .prepare("PRAGMA table_info(transactions)")
+            .unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for required in [
+            "transaction_id",
+            "trade_id",
+            "type",
+            "state",
+            "submitted_at",
+            "confirmed_at",
+            "transaction_hash",
+            "error_msg",
+        ] {
+            assert!(
+                cols.iter().any(|c| c == required),
+                "missing column: {} (have {:?})",
+                required,
+                cols
+            );
+        }
+    }
+
+    #[test]
+    fn signals_table_has_v2_fee_columns() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut stmt = store.conn.prepare("PRAGMA table_info(signals)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for required in ["taker_fee_bps", "maker_fee_bps", "rebate_bps"] {
+            assert!(
+                cols.iter().any(|c| c == required),
+                "signals missing V2 column: {} (have {:?})",
+                required,
+                cols
+            );
+        }
+    }
+
+    #[test]
+    fn trades_table_has_v2_relayer_columns() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut stmt = store.conn.prepare("PRAGMA table_info(trades)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for required in [
+            "transaction_id",
+            "transaction_hash",
+            "relayer_state",
+            "taker_fee_bps",
+            "fee_paid_usdc",
+            "rebate_usdc",
+            "retry_count",
+            "error_msg",
+        ] {
+            assert!(
+                cols.iter().any(|c| c == required),
+                "trades missing V2 column: {} (have {:?})",
+                required,
+                cols
+            );
+        }
+    }
+
+    #[test]
+    fn daily_stats_has_v2_fee_columns() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut stmt = store
+            .conn
+            .prepare("PRAGMA table_info(daily_stats)")
+            .unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for required in ["fees_paid", "rebates_earned"] {
+            assert!(
+                cols.iter().any(|c| c == required),
+                "daily_stats missing V2 column: {} (have {:?})",
+                required,
+                cols
+            );
+        }
+    }
+
+    #[test]
+    fn foreign_keys_are_enforced() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let fk_on: i64 = store
+            .conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fk_on, 1, "PRAGMA foreign_keys should be ON");
+
+        // Write a transactions row that references a non-existent trade.
+        let result = store.conn.execute(
+            "INSERT INTO transactions
+                (transaction_id, trade_id, type, state, submitted_at)
+             VALUES ('tx-orphan', 'trade-does-not-exist', 'order', 'STATE_NEW',
+                     '2026-04-24T00:00:00Z')",
+            [],
+        );
+        assert!(
+            result.is_err(),
+            "FK constraint should reject orphan trade_id, got Ok({:?})",
+            result
+        );
+    }
+}
+
+#[cfg(test)]
+mod transactions_crud_tests {
+    use super::SqliteStore;
+    use polybot_common::types::{TransactionKind, TransactionRecord, TransactionState};
+    use chrono::Utc;
+
+    fn sample_record() -> TransactionRecord {
+        TransactionRecord {
+            transaction_id: "txn_abc123".into(),
+            trade_id: None,
+            kind: TransactionKind::Order,
+            state: TransactionState::New,
+            submitted_at: Utc::now(),
+            confirmed_at: None,
+            transaction_hash: None,
+            error_msg: None,
+        }
+    }
+
+    #[test]
+    fn insert_and_get_transaction_roundtrip() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let rec = sample_record();
+        store.insert_transaction(&rec).unwrap();
+        let got = store
+            .get_transaction(&rec.transaction_id)
+            .unwrap()
+            .expect("transaction should exist");
+        assert_eq!(got.transaction_id, rec.transaction_id);
+        assert_eq!(got.kind, TransactionKind::Order);
+        assert_eq!(got.state, TransactionState::New);
+    }
+
+    #[test]
+    fn update_transaction_state_promotes_to_terminal() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let rec = sample_record();
+        store.insert_transaction(&rec).unwrap();
+        store
+            .update_transaction_state(
+                &rec.transaction_id,
+                TransactionState::Success,
+                Some("0xdeadbeef"),
+                None,
+            )
+            .unwrap();
+        let got = store
+            .get_transaction(&rec.transaction_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.state, TransactionState::Success);
+        assert_eq!(got.transaction_hash.as_deref(), Some("0xdeadbeef"));
+        assert!(got.confirmed_at.is_some());
+    }
+
+    #[test]
+    fn list_non_terminal_transactions_filters_by_state() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut a = sample_record();
+        a.transaction_id = "txn_a".into();
+        let mut b = sample_record();
+        b.transaction_id = "txn_b".into();
+        b.state = TransactionState::Success;
+        store.insert_transaction(&a).unwrap();
+        store.insert_transaction(&b).unwrap();
+        let pending = store.list_non_terminal_transactions().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].transaction_id, "txn_a");
+    }
+}
+
+#[cfg(test)]
+mod migration_roundtrip_tests {
+    use super::SqliteStore;
+    use std::path::PathBuf;
+
+    fn tmp_db_path() -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("polybot-phase1-{}.db", uuid::Uuid::new_v4()));
+        p
+    }
+
+    #[test]
+    fn fresh_db_applies_all_migrations_then_reopen_is_noop() {
+        let path = tmp_db_path();
+        let _ = std::fs::remove_file(&path);
+
+        // First open: apply every migration.
+        {
+            let store = SqliteStore::open(&path).expect("open fresh db");
+            store
+                .conn
+                .execute_batch(
+                    "INSERT INTO transactions
+                        (transaction_id, trade_id, type, state, submitted_at)
+                     VALUES ('tx1', NULL, 'wrap', 'STATE_NEW', '2026-04-24T00:00:00Z');
+                     INSERT INTO signals
+                        (id, source, received_at, target_wallet, market_id,
+                         token_id, side, outcome, target_price, target_size,
+                         confidence, secret_level, category)
+                     VALUES ('s1','polling','2026-04-24T00:00:00Z','0xabc','m1',
+                             'tok1','YES','YES','0.5','10',7,6,'politics');",
+                )
+                .expect("v2 tables/columns usable");
+        }
+
+        // Second open: migrations already recorded, previously-written row
+        // still present, v3 default for taker_fee_bps applied.
+        {
+            let store = SqliteStore::open(&path).expect("reopen");
+            let n: i64 = store
+                .conn
+                .query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 1, "transactions row lost on reopen");
+
+            let taker_fee_bps: i64 = store
+                .conn
+                .query_row(
+                    "SELECT taker_fee_bps FROM signals WHERE id = 's1'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(taker_fee_bps, 0, "migration v3 default should be 0");
+
+            let max_version: i64 = store
+                .conn
+                .query_row(
+                    "SELECT COALESCE(MAX(version), -1) FROM schema_migrations",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(
+                max_version >= 5,
+                "expected all v1-v5 migrations, got {}",
+                max_version
+            );
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod insert_trade_v2_tests {
+    use super::SqliteStore;
+    use polybot_common::types::{
+        Category, OrderType, Side, Trade, TradeDirection, TradeStatus, TransactionState,
+    };
+    use rust_decimal_macros::dec;
+
+    fn v2_trade() -> Trade {
+        Trade {
+            id: "t-v2".into(),
+            signal_id: "s-v2".into(),
+            source_wallet: "0xabc123abc123abc123abc123abc123abc123abc1".into(),
+            market_id: "m-v2".into(),
+            category: Category::Politics,
+            side: Side::Yes,
+            direction: TradeDirection::Buy,
+            price: dec!(0.50),
+            size: dec!(100),
+            size_usd: dec!(50),
+            filled_size: dec!(100),
+            order_type: OrderType::Fok,
+            status: TradeStatus::Filled,
+            placed_at: chrono::Utc::now(),
+            filled_at: Some(chrono::Utc::now()),
+            simulated: false,
+            transaction_id: Some("txn_zzz".into()),
+            transaction_hash: Some("0xabc".into()),
+            relayer_state: Some(TransactionState::Success),
+            taker_fee_bps: 125,
+            fee_paid_usdc: dec!(0.25),
+            rebate_usdc: dec!(0.05),
+            retry_count: 2,
+            error_msg: None,
+        }
+    }
+
+    #[test]
+    fn insert_trade_persists_v2_relayer_columns() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store.insert_trade(&v2_trade()).unwrap();
+
+        let (txn_id, txn_hash, relayer_state, taker_fee_bps, fee_paid, rebate, retry_count): (
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            i64,
+            String,
+            String,
+            i64,
+        ) = store
+            .conn
+            .query_row(
+                "SELECT transaction_id, transaction_hash, relayer_state,
+                        taker_fee_bps, fee_paid_usdc, rebate_usdc, retry_count
+                 FROM trades WHERE id = 't-v2'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+            )
+            .unwrap();
+
+        assert_eq!(txn_id.as_deref(), Some("txn_zzz"));
+        assert_eq!(txn_hash.as_deref(), Some("0xabc"));
+        assert_eq!(relayer_state.as_deref(), Some("STATE_SUCCESS"));
+        assert_eq!(taker_fee_bps, 125);
+        assert_eq!(fee_paid, "0.25");
+        assert_eq!(rebate, "0.05");
+        assert_eq!(retry_count, 2);
     }
 }

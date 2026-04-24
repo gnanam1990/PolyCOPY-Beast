@@ -173,6 +173,7 @@ pub fn normalize_data_api_trade(json: &str, source: SignalSource) -> Result<Sign
             .and_then(|value| value.as_bool())
             .unwrap_or(false),
         suggested_size_usdc: target_size_usdc,
+        fee_schedule: None,
         scanner_version: "2.0.0".to_string(),
     })
 }
@@ -264,6 +265,7 @@ pub fn parse_signal(json: &str) -> Result<Signal, PolybotError> {
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         suggested_size_usdc: suggested_size,
+        fee_schedule: None,
         scanner_version: raw
             .get("scanner_version")
             .and_then(|v| v.as_str())

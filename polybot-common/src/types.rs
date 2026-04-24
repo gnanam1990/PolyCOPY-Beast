@@ -201,6 +201,8 @@ pub struct Signal {
     pub redeemable: bool,
     #[serde(default)]
     pub suggested_size_usdc: Option<Decimal>,
+    #[serde(default)]
+    pub fee_schedule: Option<FeeSchedule>,
     #[serde(default = "default_scanner_version")]
     pub scanner_version: String,
 }
@@ -421,6 +423,23 @@ pub struct Trade {
     pub placed_at: DateTime<Utc>,
     pub filled_at: Option<DateTime<Utc>>,
     pub simulated: bool,
+    // --- V2 fields (default to None/zero for V1 compatibility) ---
+    #[serde(default)]
+    pub transaction_id: Option<String>,
+    #[serde(default)]
+    pub transaction_hash: Option<String>,
+    #[serde(default)]
+    pub relayer_state: Option<TransactionState>,
+    #[serde(default)]
+    pub taker_fee_bps: u32,
+    #[serde(default)]
+    pub fee_paid_usdc: Decimal,
+    #[serde(default)]
+    pub rebate_usdc: Decimal,
+    #[serde(default)]
+    pub retry_count: u32,
+    #[serde(default)]
+    pub error_msg: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -431,6 +450,117 @@ pub enum TradeStatus {
     Cancelled,
     TimedOut,
     Failed(String),
+}
+
+/// Match-time fee schedule for a CLOB V2 market.
+///
+/// Units per PRD §18: all fields are basis points × 100.
+/// i.e. `taker_fee_bps = 12500` means 125 bps, which is 1.25%.
+///
+/// Name collision note: the *struct field* uses `_bps` suffix for Rust
+/// ergonomics, but the JSON shape uses `takerFee` / `makerFee` / `rebate`
+/// as specified in the PRD.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeeSchedule {
+    #[serde(rename = "takerFee")]
+    pub taker_fee_bps: u32,
+    #[serde(rename = "makerFee")]
+    pub maker_fee_bps: u32,
+    #[serde(rename = "rebate")]
+    pub rebate_bps: u32,
+}
+
+impl FeeSchedule {
+    /// Taker fee in true basis points (PRD units / 100).
+    /// The `_true` suffix avoids a visual collision with the raw
+    /// `taker_fee_bps` field, which stores basis points × 100.
+    pub fn taker_bps_true(&self) -> u32 {
+        self.taker_fee_bps / 100
+    }
+
+    /// Maker fee in true basis points.
+    pub fn maker_bps_true(&self) -> u32 {
+        self.maker_fee_bps / 100
+    }
+
+    /// Maker rebate in true basis points.
+    pub fn rebate_bps_true(&self) -> u32 {
+        self.rebate_bps / 100
+    }
+}
+
+/// Async relayer transaction lifecycle, per PRD §2.5.
+///
+/// Wire format from `GET /transaction?transactionID=...` uses the prefixed
+/// strings `STATE_NEW`, `STATE_PENDING`, `STATE_SUBMITTED`, `STATE_SUCCESS`,
+/// `STATE_FAILED`. We serialize in that shape for direct deserialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransactionState {
+    #[serde(rename = "STATE_NEW")]
+    New,
+    #[serde(rename = "STATE_PENDING")]
+    Pending,
+    #[serde(rename = "STATE_SUBMITTED")]
+    Submitted,
+    #[serde(rename = "STATE_SUCCESS")]
+    Success,
+    #[serde(rename = "STATE_FAILED")]
+    Failed,
+}
+
+impl TransactionState {
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, TransactionState::Success | TransactionState::Failed)
+    }
+
+    pub fn as_sqlite_str(&self) -> &'static str {
+        match self {
+            TransactionState::New => "STATE_NEW",
+            TransactionState::Pending => "STATE_PENDING",
+            TransactionState::Submitted => "STATE_SUBMITTED",
+            TransactionState::Success => "STATE_SUCCESS",
+            TransactionState::Failed => "STATE_FAILED",
+        }
+    }
+}
+
+/// Type of action submitted through the relayer. Distinct from `order_type`
+/// on the Trade row. Persisted as TEXT in the `transactions.type` column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransactionKind {
+    Order,
+    Cancel,
+    Wrap,
+    Approve,
+    Redeem,
+    Deploy,
+}
+
+impl TransactionKind {
+    pub fn as_sqlite_str(&self) -> &'static str {
+        match self {
+            TransactionKind::Order => "order",
+            TransactionKind::Cancel => "cancel",
+            TransactionKind::Wrap => "wrap",
+            TransactionKind::Approve => "approve",
+            TransactionKind::Redeem => "redeem",
+            TransactionKind::Deploy => "deploy",
+        }
+    }
+}
+
+/// Row for the `transactions` table (PRD §12.3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionRecord {
+    pub transaction_id: String,
+    pub trade_id: Option<String>,
+    pub kind: TransactionKind,
+    pub state: TransactionState,
+    pub submitted_at: DateTime<Utc>,
+    pub confirmed_at: Option<DateTime<Utc>>,
+    pub transaction_hash: Option<String>,
+    pub error_msg: Option<String>,
 }
 
 #[cfg(test)]
@@ -510,6 +640,7 @@ mod tests {
             resolved: false,
             redeemable: false,
             suggested_size_usdc: Some(dec!(50)),
+            fee_schedule: None,
             scanner_version: "1.0.0".to_string(),
         }
     }
@@ -654,8 +785,82 @@ mod tests {
             placed_at: Utc::now(),
             filled_at: None,
             simulated: false,
+            transaction_id: None,
+            transaction_hash: None,
+            relayer_state: None,
+            taker_fee_bps: 0,
+            fee_paid_usdc: Decimal::ZERO,
+            rebate_usdc: Decimal::ZERO,
+            retry_count: 0,
+            error_msg: None,
         };
         assert!(!trade.simulated);
+    }
+
+    #[test]
+    fn fee_schedule_deserializes_from_prd_shape() {
+        let json = r#"{"takerFee":12500,"makerFee":0,"rebate":2500}"#;
+        let fs: FeeSchedule = serde_json::from_str(json).unwrap();
+        assert_eq!(fs.taker_fee_bps, 12500);
+        assert_eq!(fs.maker_fee_bps, 0);
+        assert_eq!(fs.rebate_bps, 2500);
+    }
+
+    #[test]
+    fn fee_schedule_converts_bps_hundredths_to_bps() {
+        let fs = FeeSchedule { taker_fee_bps: 12500, maker_fee_bps: 0, rebate_bps: 2500 };
+        assert_eq!(fs.taker_bps_true(), 125);
+        assert_eq!(fs.maker_bps_true(), 0);
+        assert_eq!(fs.rebate_bps_true(), 25);
+    }
+
+    #[test]
+    fn fee_schedule_serializes_with_camel_case_keys() {
+        let fs = FeeSchedule { taker_fee_bps: 500, maker_fee_bps: 0, rebate_bps: 100 };
+        let s = serde_json::to_string(&fs).unwrap();
+        assert!(s.contains("\"takerFee\":500"), "got: {}", s);
+        assert!(s.contains("\"makerFee\":0"), "got: {}", s);
+        assert!(s.contains("\"rebate\":100"), "got: {}", s);
+    }
+
+    #[test]
+    fn transaction_state_roundtrips_via_json() {
+        let states = [
+            TransactionState::New,
+            TransactionState::Pending,
+            TransactionState::Submitted,
+            TransactionState::Success,
+            TransactionState::Failed,
+        ];
+        for s in states {
+            let j = serde_json::to_string(&s).unwrap();
+            let back: TransactionState = serde_json::from_str(&j).unwrap();
+            assert_eq!(s, back, "roundtrip failed for {:?} -> {}", s, j);
+        }
+    }
+
+    #[test]
+    fn transaction_state_parses_relayer_wire_format() {
+        let cases = [
+            ("\"STATE_NEW\"", TransactionState::New),
+            ("\"STATE_PENDING\"", TransactionState::Pending),
+            ("\"STATE_SUBMITTED\"", TransactionState::Submitted),
+            ("\"STATE_SUCCESS\"", TransactionState::Success),
+            ("\"STATE_FAILED\"", TransactionState::Failed),
+        ];
+        for (wire, expected) in cases {
+            let parsed: TransactionState = serde_json::from_str(wire).unwrap();
+            assert_eq!(parsed, expected);
+        }
+    }
+
+    #[test]
+    fn transaction_state_is_terminal() {
+        assert!(!TransactionState::New.is_terminal());
+        assert!(!TransactionState::Pending.is_terminal());
+        assert!(!TransactionState::Submitted.is_terminal());
+        assert!(TransactionState::Success.is_terminal());
+        assert!(TransactionState::Failed.is_terminal());
     }
 
     #[test]
@@ -670,8 +875,98 @@ mod tests {
             "secret_level": 6,
             "category": "politics"
         }"#;
-
         let signal: Signal = serde_json::from_str(json).unwrap();
         assert_eq!(signal.direction, TradeDirection::Buy);
+    }
+
+    #[test]
+    fn signal_deserializes_v1_payload_without_fee_schedule() {
+        let v1_json = r#"{
+            "signal_id": "11111111-1111-4111-8111-111111111111",
+            "timestamp": "2026-04-24T13:45:22.123Z",
+            "wallet_address": "0x0000000000000000000000000000000000000001",
+            "market_id": "mkt-1",
+            "side": "YES",
+            "confidence": 7,
+            "secret_level": 6,
+            "category": "politics"
+        }"#;
+        let sig: Signal = serde_json::from_str(v1_json).unwrap();
+        assert!(sig.fee_schedule.is_none());
+    }
+
+    #[test]
+    fn signal_deserializes_v2_payload_with_fee_schedule() {
+        let v2_json = r#"{
+            "signal_id": "22222222-2222-4222-8222-222222222222",
+            "timestamp": "2026-04-24T13:45:22.123Z",
+            "wallet_address": "0x0000000000000000000000000000000000000002",
+            "market_id": "mkt-2",
+            "side": "NO",
+            "confidence": 8,
+            "secret_level": 7,
+            "category": "crypto",
+            "fee_schedule": {"takerFee": 12500, "makerFee": 0, "rebate": 2500}
+        }"#;
+        let sig: Signal = serde_json::from_str(v2_json).unwrap();
+        let fs = sig.fee_schedule.expect("fee_schedule present");
+        assert_eq!(fs.taker_fee_bps, 12500);
+        assert_eq!(fs.rebate_bps, 2500);
+    }
+
+    #[test]
+    fn trade_has_optional_v2_fields_with_sensible_defaults() {
+        let tr = Trade {
+            id: "t1".into(),
+            signal_id: "s1".into(),
+            source_wallet: "0xabc123abc123abc123abc123abc123abc123abc1".into(),
+            market_id: "m1".into(),
+            category: Category::Politics,
+            side: Side::Yes,
+            direction: TradeDirection::Buy,
+            price: dec!(0.5),
+            size: dec!(100),
+            size_usd: dec!(50),
+            filled_size: dec!(100),
+            order_type: OrderType::Fok,
+            status: TradeStatus::Filled,
+            placed_at: chrono::Utc::now(),
+            filled_at: None,
+            simulated: true,
+            transaction_id: None,
+            transaction_hash: None,
+            relayer_state: None,
+            taker_fee_bps: 0,
+            fee_paid_usdc: dec!(0),
+            rebate_usdc: dec!(0),
+            retry_count: 0,
+            error_msg: None,
+        };
+        assert!(tr.transaction_id.is_none());
+        assert_eq!(tr.taker_fee_bps, 0);
+        assert_eq!(tr.fee_paid_usdc, dec!(0));
+    }
+
+    #[test]
+    fn trade_roundtrips_v1_json_with_missing_v2_fields() {
+        let v1_json = r#"{
+            "id": "t1",
+            "signal_id": "s1",
+            "market_id": "m1",
+            "category": "politics",
+            "side": "YES",
+            "price": "0.5",
+            "size": "100",
+            "size_usd": "50",
+            "filled_size": "100",
+            "order_type": "fok",
+            "status": "Filled",
+            "placed_at": "2026-04-24T13:45:22.123Z",
+            "filled_at": null,
+            "simulated": true
+        }"#;
+        let tr: Trade = serde_json::from_str(v1_json).unwrap();
+        assert!(tr.transaction_id.is_none());
+        assert_eq!(tr.retry_count, 0);
     }
 }

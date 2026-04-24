@@ -37,7 +37,6 @@ target_categories = []
 
 [execution]
 slippage_threshold = 0.02
-rpc_endpoints = ["https://polygon-rpc.com", "https://rpc-mainnet.maticvigil.com"]
 ws_reconnect_max_wait_secs = 60
 heartbeat_interval_secs = 30
 order_timeout_secs = 30
