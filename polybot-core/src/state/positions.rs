@@ -267,6 +267,14 @@ mod tests {
             placed_at: Utc::now(),
             filled_at: Some(Utc::now()),
             simulated: true,
+            transaction_id: None,
+            transaction_hash: None,
+            relayer_state: None,
+            taker_fee_bps: 0,
+            fee_paid_usdc: rust_decimal::Decimal::ZERO,
+            rebate_usdc: rust_decimal::Decimal::ZERO,
+            retry_count: 0,
+            error_msg: None,
         }
     }
 

@@ -848,6 +848,14 @@ mod tests {
             placed_at: chrono::Utc::now(),
             filled_at: Some(chrono::Utc::now()),
             simulated: true,
+            transaction_id: None,
+            transaction_hash: None,
+            relayer_state: None,
+            taker_fee_bps: 0,
+            fee_paid_usdc: Decimal::ZERO,
+            rebate_usdc: Decimal::ZERO,
+            retry_count: 0,
+            error_msg: None,
         };
         store.insert_trade(&trade).unwrap();
         assert_eq!(store.get_trade_count().unwrap(), 1);
@@ -1044,6 +1052,14 @@ mod tests {
             placed_at: chrono::Utc::now() - chrono::Duration::seconds(30),
             filled_at: Some(chrono::Utc::now() - chrono::Duration::seconds(20)),
             simulated: true,
+            transaction_id: None,
+            transaction_hash: None,
+            relayer_state: None,
+            taker_fee_bps: 0,
+            fee_paid_usdc: Decimal::ZERO,
+            rebate_usdc: Decimal::ZERO,
+            retry_count: 0,
+            error_msg: None,
         };
         let trade2 = Trade {
             id: "t2".to_string(),
@@ -1061,6 +1077,14 @@ mod tests {
             placed_at: chrono::Utc::now(),
             filled_at: Some(chrono::Utc::now()),
             simulated: false,
+            transaction_id: None,
+            transaction_hash: None,
+            relayer_state: None,
+            taker_fee_bps: 0,
+            fee_paid_usdc: Decimal::ZERO,
+            rebate_usdc: Decimal::ZERO,
+            retry_count: 0,
+            error_msg: None,
         };
 
         store.insert_trade(&trade1).unwrap();

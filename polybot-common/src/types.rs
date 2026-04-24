@@ -417,6 +417,23 @@ pub struct Trade {
     pub placed_at: DateTime<Utc>,
     pub filled_at: Option<DateTime<Utc>>,
     pub simulated: bool,
+    // --- V2 fields (default to None/zero for V1 compatibility) ---
+    #[serde(default)]
+    pub transaction_id: Option<String>,
+    #[serde(default)]
+    pub transaction_hash: Option<String>,
+    #[serde(default)]
+    pub relayer_state: Option<TransactionState>,
+    #[serde(default)]
+    pub taker_fee_bps: u32,
+    #[serde(default)]
+    pub fee_paid_usdc: Decimal,
+    #[serde(default)]
+    pub rebate_usdc: Decimal,
+    #[serde(default)]
+    pub retry_count: u32,
+    #[serde(default)]
+    pub error_msg: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -740,6 +757,14 @@ mod tests {
             placed_at: Utc::now(),
             filled_at: None,
             simulated: false,
+            transaction_id: None,
+            transaction_hash: None,
+            relayer_state: None,
+            taker_fee_bps: 0,
+            fee_paid_usdc: Decimal::ZERO,
+            rebate_usdc: Decimal::ZERO,
+            retry_count: 0,
+            error_msg: None,
         };
         assert!(!trade.simulated);
     }
@@ -843,5 +868,60 @@ mod tests {
         let fs = sig.fee_schedule.expect("fee_schedule present");
         assert_eq!(fs.taker_fee_bps, 12500);
         assert_eq!(fs.rebate_bps, 2500);
+    }
+
+    #[test]
+    fn trade_has_optional_v2_fields_with_sensible_defaults() {
+        let tr = Trade {
+            id: "t1".into(),
+            signal_id: "s1".into(),
+            market_id: "m1".into(),
+            category: Category::Politics,
+            side: Side::Yes,
+            direction: OrderDirection::Buy,
+            price: dec!(0.5),
+            size: dec!(100),
+            size_usd: dec!(50),
+            filled_size: dec!(100),
+            order_type: OrderType::Fok,
+            status: TradeStatus::Filled,
+            placed_at: chrono::Utc::now(),
+            filled_at: None,
+            simulated: true,
+            transaction_id: None,
+            transaction_hash: None,
+            relayer_state: None,
+            taker_fee_bps: 0,
+            fee_paid_usdc: dec!(0),
+            rebate_usdc: dec!(0),
+            retry_count: 0,
+            error_msg: None,
+        };
+        assert!(tr.transaction_id.is_none());
+        assert_eq!(tr.taker_fee_bps, 0);
+        assert_eq!(tr.fee_paid_usdc, dec!(0));
+    }
+
+    #[test]
+    fn trade_roundtrips_v1_json_with_missing_v2_fields() {
+        let v1_json = r#"{
+            "id": "t1",
+            "signal_id": "s1",
+            "market_id": "m1",
+            "category": "politics",
+            "side": "YES",
+            "price": "0.5",
+            "size": "100",
+            "size_usd": "50",
+            "filled_size": "100",
+            "order_type": "fok",
+            "status": "Filled",
+            "placed_at": "2026-04-24T13:45:22.123Z",
+            "filled_at": null,
+            "simulated": true
+        }"#;
+        let tr: Trade = serde_json::from_str(v1_json).unwrap();
+        assert!(tr.transaction_id.is_none());
+        assert_eq!(tr.retry_count, 0);
     }
 }
