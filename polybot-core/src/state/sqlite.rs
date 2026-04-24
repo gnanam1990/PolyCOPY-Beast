@@ -235,7 +235,54 @@ impl SqliteStore {
             );",
             )
             .map_err(|e| PolybotError::State(format!("Failed to create tables: {}", e)))?;
+        self.run_migrations()?;
         Ok(())
+    }
+
+    fn run_migrations(&self) -> Result<(), PolybotError> {
+        use crate::state::migrations::MIGRATIONS;
+
+        let current: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| PolybotError::State(format!("Failed to read schema_migrations: {}", e)))?;
+
+        for migration in MIGRATIONS.iter().filter(|m| m.version > current) {
+            tracing::info!(
+                version = migration.version,
+                description = migration.description,
+                "Applying schema migration"
+            );
+            self.conn
+                .execute_batch(migration.sql)
+                .map_err(|e| {
+                    PolybotError::State(format!(
+                        "Migration v{} ({}) failed: {}",
+                        migration.version, migration.description, e
+                    ))
+                })?;
+            self.conn
+                .execute(
+                    "INSERT INTO schema_migrations (version) VALUES (?1)",
+                    [migration.version],
+                )
+                .map_err(|e| {
+                    PolybotError::State(format!(
+                        "Failed to record schema_migrations v{}: {}",
+                        migration.version, e
+                    ))
+                })?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn run_migrations_for_test(&self) -> Result<(), PolybotError> {
+        self.run_migrations()
     }
 
     pub fn insert_trade(&self, trade: &Trade) -> Result<(), PolybotError> {
@@ -1013,5 +1060,30 @@ mod tests {
         assert_eq!(trades.len(), 2);
         assert_eq!(trades[0].id, "t2");
         assert_eq!(trades[1].id, "t1");
+    }
+}
+
+#[cfg(test)]
+mod migration_runner_tests {
+    use super::SqliteStore;
+
+    #[test]
+    fn new_database_records_latest_migration_version() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let version: i64 = store
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), -1) FROM schema_migrations",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(version >= 0, "migration runner did not record any version");
+    }
+
+    #[test]
+    fn migrations_are_idempotent() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store.run_migrations_for_test().expect("re-run should be no-op");
     }
 }

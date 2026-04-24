@@ -1,3 +1,4 @@
+pub mod migrations;
 pub mod pnl;
 pub mod positions;
 pub mod reconciliation;
