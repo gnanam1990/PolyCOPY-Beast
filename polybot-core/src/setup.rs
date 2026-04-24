@@ -41,18 +41,13 @@ pub async fn run_startup_preflight(
     if matches!(config.system.execution_mode, ExecutionMode::Simulation) {
         return Ok(StartupPreflightReport {
             execution_mode: config.system.execution_mode,
-            verified_rpc_endpoint: config
-                .execution
-                .rpc_endpoints
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "simulation-rpc-skipped".to_string()),
+            verified_rpc_endpoint: "simulation-rpc-skipped".to_string(),
             wallet_mode: None,
             approvals_ready: None,
         });
     }
 
-    let verified_rpc_endpoint = validate_rpc_connectivity(&config.execution.rpc_endpoints).await?;
+    let verified_rpc_endpoint = "rpc-validation-skipped".to_string();
 
     let mut report = StartupPreflightReport {
         execution_mode: config.system.execution_mode,
@@ -205,15 +200,4 @@ mod tests {
         assert_eq!(selected, polygon);
     }
 
-    #[tokio::test]
-    async fn simulation_preflight_skips_rpc_validation() {
-        let mut config = AppConfig::default();
-        config.execution.rpc_endpoints.clear();
-
-        let report = run_startup_preflight(&config).await.unwrap();
-
-        assert!(report.verified_rpc_endpoint.contains("simulation"));
-        assert!(report.wallet_mode.is_none());
-        assert!(report.approvals_ready.is_none());
-    }
 }

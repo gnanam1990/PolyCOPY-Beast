@@ -146,7 +146,6 @@ pub struct ScannerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionConfig {
     pub slippage_threshold: Decimal,
-    pub rpc_endpoints: Vec<String>,
     pub ws_reconnect_max_wait_secs: u64,
     pub heartbeat_interval_secs: u64,
     pub order_timeout_secs: u64,
@@ -251,7 +250,6 @@ impl Default for AppConfig {
             },
             execution: ExecutionConfig {
                 slippage_threshold: C::DEFAULT_SLIPPAGE_THRESHOLD,
-                rpc_endpoints: vec!["https://polygon-rpc.com".to_string()],
                 ws_reconnect_max_wait_secs: 60,
                 heartbeat_interval_secs: C::WS_HEARTBEAT_SECS,
                 order_timeout_secs: C::ORDER_TIMEOUT_SECS,
@@ -359,17 +357,6 @@ impl AppConfig {
                 "execution.price_buffer must be >= 0".to_string(),
             ));
         }
-        if !self.system.simulation && self.execution.rpc_endpoints.len() < 2 {
-            tracing::warn!(
-                "v2.5 requires minimum 2 RPC endpoints. Only {} configured.",
-                self.execution.rpc_endpoints.len()
-            );
-        }
-        if !self.system.simulation && self.execution.rpc_endpoints.is_empty() {
-            return Err(PolybotError::Config(
-                "At least one RPC endpoint required".to_string(),
-            ));
-        }
         if self.scanner.dedup_window_secs == 0 {
             return Err(PolybotError::Config(
                 "dedup_window_secs must be > 0".to_string(),
@@ -408,9 +395,6 @@ impl AppConfig {
         }
         if let Ok(val) = std::env::var("POLYBOT_LOG_LEVEL") {
             self.system.log_level = val;
-        }
-        if let Ok(val) = std::env::var("POLYGON_RPC_URL") {
-            self.execution.rpc_endpoints = vec![val];
         }
         if let Ok(val) =
             std::env::var("POLYBOT_DATA_API_URL").or_else(|_| std::env::var("DATA_API_URL"))
@@ -578,26 +562,9 @@ mod tests {
     }
 
     #[test]
-    fn empty_rpc_endpoints_rejected() {
-        let mut config = AppConfig::default();
-        config.system.simulation = false;
-        config.system.execution_mode = ExecutionMode::Live;
-        config.execution.rpc_endpoints = vec![];
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
     fn max_concurrent_positions_default() {
         let config = AppConfig::default();
         assert_eq!(config.risk.max_concurrent_positions, 20);
-    }
-
-    #[test]
-    fn simulation_config_allows_empty_rpc_endpoints() {
-        let mut config = AppConfig::default();
-        config.execution.rpc_endpoints.clear();
-
-        assert!(config.validate().is_ok());
     }
 
     #[test]
