@@ -61,6 +61,8 @@ pub struct AppConfig {
     pub relayer: Option<RelayerConfig>,
     #[serde(default = "default_collateral_config")]
     pub collateral: CollateralConfig,
+    #[serde(default)]
+    pub builder: Option<BuilderConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,6 +170,13 @@ fn default_collateral_config() -> CollateralConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BuilderConfig {
+    /// V2 builder code (bytes32 hex, 0x-prefixed, 66 chars).
+    /// Included in every V2 order's `builder` field.
+    pub code: String,
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -225,6 +234,7 @@ impl Default for AppConfig {
             },
             relayer: None,
             collateral: default_collateral_config(),
+            builder: None,
         }
     }
 }
@@ -478,6 +488,10 @@ impl AppConfig {
             self.collateral.token = val;
         }
 
+        if let Ok(code) = std::env::var("BUILDER_CODE") {
+            self.builder = Some(BuilderConfig { code });
+        }
+
         self.reconcile_system_mode();
     }
 }
@@ -635,5 +649,22 @@ mod tests {
         assert_eq!(config.collateral.usdc_e_address, "0x1111111111111111111111111111111111111111");
         std::env::remove_var("COLLATERAL_ONRAMP_ADDRESS");
         std::env::remove_var("USDC_E_ADDRESS");
+    }
+
+    #[test]
+    fn builder_config_is_none_by_default() {
+        let config = AppConfig::default();
+        assert!(config.builder.is_none());
+    }
+
+    #[test]
+    fn builder_config_parses_from_env() {
+        let code = "0x00000000000000000000000000000000000000000000000000000000deadbeef";
+        std::env::set_var("BUILDER_CODE", code);
+        let mut config = AppConfig::default();
+        config.apply_env_overrides();
+        let builder = config.builder.as_ref().expect("builder should be populated");
+        assert_eq!(builder.code, code);
+        std::env::remove_var("BUILDER_CODE");
     }
 }
