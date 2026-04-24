@@ -57,6 +57,8 @@ pub struct AppConfig {
     pub execution: ExecutionConfig,
     pub telegram: TelegramConfig,
     pub dashboard: DashboardConfig,
+    #[serde(default)]
+    pub relayer: Option<RelayerConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,6 +139,13 @@ pub struct DashboardConfig {
     pub port: u16,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RelayerConfig {
+    pub url: String,
+    pub api_key: String,
+    pub api_key_address: String,
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -192,6 +201,7 @@ impl Default for AppConfig {
                 host: "0.0.0.0".to_string(),
                 port: 8080,
             },
+            relayer: None,
         }
     }
 }
@@ -416,6 +426,25 @@ impl AppConfig {
                 .collect();
         }
 
+        // V2 relayer config: all three vars must be present.
+        let relayer_url = std::env::var("RELAYER_URL").ok();
+        let relayer_api_key = std::env::var("RELAYER_API_KEY").ok();
+        let relayer_api_key_address = std::env::var("RELAYER_API_KEY_ADDRESS").ok();
+        self.relayer = match (relayer_url, relayer_api_key, relayer_api_key_address) {
+            (Some(url), Some(api_key), Some(api_key_address)) => Some(RelayerConfig {
+                url,
+                api_key,
+                api_key_address,
+            }),
+            (None, None, None) => None,
+            _ => {
+                tracing::warn!(
+                    "Partial RELAYER_* config detected; requires all of RELAYER_URL, RELAYER_API_KEY, RELAYER_API_KEY_ADDRESS. Ignoring."
+                );
+                None
+            }
+        };
+
         self.reconcile_system_mode();
     }
 }
@@ -516,5 +545,39 @@ mod tests {
         assert_eq!(config.scanner.signal_max_age_secs, 30);
         assert!(config.scanner.use_websocket);
         assert!(config.scanner.target_categories.is_empty());
+    }
+
+    #[test]
+    fn relayer_config_is_none_by_default() {
+        let config = AppConfig::default();
+        assert!(config.relayer.is_none());
+    }
+
+    #[test]
+    fn relayer_config_parses_from_env() {
+        std::env::set_var("RELAYER_URL", "https://relayer-v2.polymarket.com");
+        std::env::set_var("RELAYER_API_KEY", "test-api-key");
+        std::env::set_var("RELAYER_API_KEY_ADDRESS", "0x1234567890123456789012345678901234567890");
+        let mut config = AppConfig::default();
+        config.apply_env_overrides();
+        let relayer = config.relayer.as_ref().expect("relayer should be populated");
+        assert_eq!(relayer.url, "https://relayer-v2.polymarket.com");
+        assert_eq!(relayer.api_key, "test-api-key");
+        assert_eq!(relayer.api_key_address, "0x1234567890123456789012345678901234567890");
+        std::env::remove_var("RELAYER_URL");
+        std::env::remove_var("RELAYER_API_KEY");
+        std::env::remove_var("RELAYER_API_KEY_ADDRESS");
+    }
+
+    #[test]
+    fn relayer_config_partial_is_rejected() {
+        std::env::set_var("RELAYER_URL", "https://relayer-v2.polymarket.com");
+        std::env::remove_var("RELAYER_API_KEY");
+        std::env::remove_var("RELAYER_API_KEY_ADDRESS");
+        let mut config = AppConfig::default();
+        config.apply_env_overrides();
+        assert!(config.relayer.is_none(),
+            "partial relayer config should be None, got {:?}", config.relayer);
+        std::env::remove_var("RELAYER_URL");
     }
 }
