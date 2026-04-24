@@ -92,7 +92,7 @@ cp .env.example .env
 ```
 
 #### Required
-- `POLYBOT_PRIVATE_KEY` — Your EOA private key (with `0x` prefix)
+- `POLYMARKET_PRIVATE_KEY` — Your EOA private key (with `0x` prefix). Legacy `POLYBOT_PRIVATE_KEY` is accepted as a deprecation alias.
 - `POLYGON_RPC_URL` — e.g. `https://polygon-rpc.com`
 
 #### Trading Setup

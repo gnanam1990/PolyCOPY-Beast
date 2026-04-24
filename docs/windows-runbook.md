@@ -24,7 +24,7 @@ POLYBOT_REDIS_URL=redis://127.0.0.1:6379
 Add these when you want live or shadow mode:
 
 ```env
-POLYBOT_PRIVATE_KEY=0xYOUR_PRIVATE_KEY
+POLYMARKET_PRIVATE_KEY=0xYOUR_PRIVATE_KEY
 POLYBOT_SIGNATURE_TYPE=0
 POLYBOT_CLOB_ENDPOINT=https://clob.polymarket.com
 POLYBOT_WS_ENDPOINT=wss://ws-subscriptions-clob.polymarket.com
@@ -36,7 +36,8 @@ Notes:
 - `POLYBOT_SIGNATURE_TYPE=0` = EOA
 - `POLYBOT_SIGNATURE_TYPE=1` = Proxy
 - `POLYBOT_SIGNATURE_TYPE=2` = GnosisSafe (requires `POLYBOT_FUNDER_ADDRESS`)
-- Alias env names also work for compatibility: `POLYMARKET_PRIVATE_KEY`, `CLOB_API_URL`, `WS_CLOB_URL`, `FUNDER_ADDRESS`, `POLYGON_CHAIN_ID`
+- `POLYMARKET_PRIVATE_KEY` is the V2 canonical name. Legacy `POLYBOT_PRIVATE_KEY` is still accepted but emits a deprecation warning.
+- Other alias env names that work for compatibility: `CLOB_API_URL`, `WS_CLOB_URL`, `FUNDER_ADDRESS`, `POLYGON_CHAIN_ID`
 
 ## 4. Preflight validation command
 
