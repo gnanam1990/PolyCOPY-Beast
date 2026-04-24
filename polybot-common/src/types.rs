@@ -462,6 +462,80 @@ impl FeeSchedule {
     }
 }
 
+/// Async relayer transaction lifecycle, per PRD §2.5.
+///
+/// Wire format from `GET /transaction?transactionID=...` uses the prefixed
+/// strings `STATE_NEW`, `STATE_PENDING`, `STATE_SUBMITTED`, `STATE_SUCCESS`,
+/// `STATE_FAILED`. We serialize in that shape for direct deserialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransactionState {
+    #[serde(rename = "STATE_NEW")]
+    New,
+    #[serde(rename = "STATE_PENDING")]
+    Pending,
+    #[serde(rename = "STATE_SUBMITTED")]
+    Submitted,
+    #[serde(rename = "STATE_SUCCESS")]
+    Success,
+    #[serde(rename = "STATE_FAILED")]
+    Failed,
+}
+
+impl TransactionState {
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, TransactionState::Success | TransactionState::Failed)
+    }
+
+    pub fn as_sqlite_str(&self) -> &'static str {
+        match self {
+            TransactionState::New => "STATE_NEW",
+            TransactionState::Pending => "STATE_PENDING",
+            TransactionState::Submitted => "STATE_SUBMITTED",
+            TransactionState::Success => "STATE_SUCCESS",
+            TransactionState::Failed => "STATE_FAILED",
+        }
+    }
+}
+
+/// Type of action submitted through the relayer. Distinct from `order_type`
+/// on the Trade row. Persisted as TEXT in the `transactions.type` column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransactionKind {
+    Order,
+    Cancel,
+    Wrap,
+    Approve,
+    Redeem,
+    Deploy,
+}
+
+impl TransactionKind {
+    pub fn as_sqlite_str(&self) -> &'static str {
+        match self {
+            TransactionKind::Order => "order",
+            TransactionKind::Cancel => "cancel",
+            TransactionKind::Wrap => "wrap",
+            TransactionKind::Approve => "approve",
+            TransactionKind::Redeem => "redeem",
+            TransactionKind::Deploy => "deploy",
+        }
+    }
+}
+
+/// Row for the `transactions` table (PRD §12.3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionRecord {
+    pub transaction_id: String,
+    pub trade_id: Option<String>,
+    pub kind: TransactionKind,
+    pub state: TransactionState,
+    pub submitted_at: DateTime<Utc>,
+    pub confirmed_at: Option<DateTime<Utc>>,
+    pub transaction_hash: Option<String>,
+    pub error_msg: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -691,5 +765,45 @@ mod tests {
         assert!(s.contains("\"takerFee\":500"), "got: {}", s);
         assert!(s.contains("\"makerFee\":0"), "got: {}", s);
         assert!(s.contains("\"rebate\":100"), "got: {}", s);
+    }
+
+    #[test]
+    fn transaction_state_roundtrips_via_json() {
+        let states = [
+            TransactionState::New,
+            TransactionState::Pending,
+            TransactionState::Submitted,
+            TransactionState::Success,
+            TransactionState::Failed,
+        ];
+        for s in states {
+            let j = serde_json::to_string(&s).unwrap();
+            let back: TransactionState = serde_json::from_str(&j).unwrap();
+            assert_eq!(s, back, "roundtrip failed for {:?} -> {}", s, j);
+        }
+    }
+
+    #[test]
+    fn transaction_state_parses_relayer_wire_format() {
+        let cases = [
+            ("\"STATE_NEW\"", TransactionState::New),
+            ("\"STATE_PENDING\"", TransactionState::Pending),
+            ("\"STATE_SUBMITTED\"", TransactionState::Submitted),
+            ("\"STATE_SUCCESS\"", TransactionState::Success),
+            ("\"STATE_FAILED\"", TransactionState::Failed),
+        ];
+        for (wire, expected) in cases {
+            let parsed: TransactionState = serde_json::from_str(wire).unwrap();
+            assert_eq!(parsed, expected);
+        }
+    }
+
+    #[test]
+    fn transaction_state_is_terminal() {
+        assert!(!TransactionState::New.is_terminal());
+        assert!(!TransactionState::Pending.is_terminal());
+        assert!(!TransactionState::Submitted.is_terminal());
+        assert!(TransactionState::Success.is_terminal());
+        assert!(TransactionState::Failed.is_terminal());
     }
 }
