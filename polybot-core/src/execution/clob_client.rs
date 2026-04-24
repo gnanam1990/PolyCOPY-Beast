@@ -190,7 +190,8 @@ pub struct ClobConfig {
     pub ws_endpoint: String,
     /// Chain ID (137 = Polygon mainnet)
     pub chain_id: u64,
-    /// Private key for signing (env var: POLYBOT_PRIVATE_KEY)
+    /// Private key for signing (env var: POLYMARKET_PRIVATE_KEY;
+    /// legacy POLYBOT_PRIVATE_KEY accepted as deprecation alias).
     pub private_key: String,
     /// API key credentials (derived from L1 auth)
     pub api_key: Option<ApiCredentials>,
@@ -1116,8 +1117,11 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn from_env_missing_key() {
-        // Clear the env var if set
+        // Clear both env var names so the fallback in read_private_key_from_env
+        // also misses.
+        std::env::remove_var("POLYMARKET_PRIVATE_KEY");
         std::env::remove_var("POLYBOT_PRIVATE_KEY");
         let result = ClobClient::from_env();
         assert!(result.is_err());
