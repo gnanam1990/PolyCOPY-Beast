@@ -49,6 +49,10 @@ fn default_use_websocket() -> bool {
     true
 }
 
+fn default_fok_max_fee_bps() -> u32 {
+    50
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub system: SystemConfig,
@@ -127,6 +131,11 @@ pub struct ExecutionConfig {
     pub order_timeout_secs: u64,
     #[serde(default = "default_price_buffer")]
     pub price_buffer: Decimal,
+    /// V2: taker-fee ceiling (true bps, PRD units / 100) above which the
+    /// order router will not emit FOK (taker) orders and falls back to GTC.
+    /// Set to 0 to disable FOK entirely.
+    #[serde(default = "default_fok_max_fee_bps")]
+    pub fok_max_fee_bps: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,6 +231,7 @@ impl Default for AppConfig {
                 heartbeat_interval_secs: C::WS_HEARTBEAT_SECS,
                 order_timeout_secs: C::ORDER_TIMEOUT_SECS,
                 price_buffer: default_price_buffer(),
+                fok_max_fee_bps: default_fok_max_fee_bps(),
             },
             telegram: TelegramConfig {
                 allowed_user_ids: vec![],
@@ -492,6 +502,12 @@ impl AppConfig {
             self.builder = Some(BuilderConfig { code });
         }
 
+        if let Ok(val) = std::env::var("FOK_MAX_FEE_BPS") {
+            if let Ok(parsed) = val.parse::<u32>() {
+                self.execution.fok_max_fee_bps = parsed;
+            }
+        }
+
         self.reconcile_system_mode();
     }
 }
@@ -666,5 +682,20 @@ mod tests {
         let builder = config.builder.as_ref().expect("builder should be populated");
         assert_eq!(builder.code, code);
         std::env::remove_var("BUILDER_CODE");
+    }
+
+    #[test]
+    fn fok_max_fee_bps_defaults_to_50() {
+        let config = AppConfig::default();
+        assert_eq!(config.execution.fok_max_fee_bps, 50);
+    }
+
+    #[test]
+    fn fok_max_fee_bps_reads_from_env() {
+        std::env::set_var("FOK_MAX_FEE_BPS", "20");
+        let mut config = AppConfig::default();
+        config.apply_env_overrides();
+        assert_eq!(config.execution.fok_max_fee_bps, 20);
+        std::env::remove_var("FOK_MAX_FEE_BPS");
     }
 }
