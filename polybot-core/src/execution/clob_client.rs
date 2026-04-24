@@ -21,6 +21,29 @@ use super::order_builder::Order;
 use super::rate_limiter::ClobRateLimiter;
 use super::retry::{RetryClass, classify_sdk_error};
 
+/// Reads the Polymarket EOA private key from the environment.
+///
+/// Prefers `POLYMARKET_PRIVATE_KEY` (V2 canonical name, PRD §6). Falls back
+/// to the legacy `POLYBOT_PRIVATE_KEY`, emitting a deprecation warning when
+/// that alias is used. The alias will be removed in a future phase once V1
+/// simulation is sunset.
+pub(crate) fn read_private_key_from_env() -> Result<String, PolybotError> {
+    match std::env::var("POLYMARKET_PRIVATE_KEY") {
+        Ok(value) => Ok(value),
+        Err(_) => match std::env::var("POLYBOT_PRIVATE_KEY") {
+            Ok(value) => {
+                tracing::warn!(
+                    "POLYBOT_PRIVATE_KEY is deprecated — rename to POLYMARKET_PRIVATE_KEY before the V1 alias is removed."
+                );
+                Ok(value)
+            }
+            Err(_) => Err(PolybotError::Config(
+                "POLYMARKET_PRIVATE_KEY not set (legacy POLYBOT_PRIVATE_KEY also absent)".to_string(),
+            )),
+        },
+    }
+}
+
 #[derive(Debug, Error)]
 #[error("{source}")]
 pub struct SubmitOrderError {
@@ -302,9 +325,7 @@ impl ClobClient {
 
     /// Create a client from environment variables.
     pub fn from_env() -> Result<Self, PolybotError> {
-        let private_key = std::env::var("POLYBOT_PRIVATE_KEY")
-            .or_else(|_| std::env::var("POLYMARKET_PRIVATE_KEY"))
-            .map_err(|_| PolybotError::Config("POLYBOT_PRIVATE_KEY not set".to_string()))?;
+        let private_key = read_private_key_from_env()?;
 
         let endpoint = std::env::var("POLYBOT_CLOB_ENDPOINT")
             .or_else(|_| std::env::var("CLOB_API_URL"))
@@ -1100,6 +1121,44 @@ mod tests {
         std::env::remove_var("POLYBOT_PRIVATE_KEY");
         let result = ClobClient::from_env();
         assert!(result.is_err());
+    }
+
+    // env-mutating tests: serialize to avoid race with each other and with
+    // any other test in this binary that reads POLYMARKET_PRIVATE_KEY /
+    // POLYBOT_PRIVATE_KEY.
+    #[test]
+    #[serial_test::serial]
+    fn private_key_reads_polymarket_env_var() {
+        std::env::remove_var("POLYBOT_PRIVATE_KEY");
+        std::env::set_var(
+            "POLYMARKET_PRIVATE_KEY",
+            "0x1111111111111111111111111111111111111111111111111111111111111111",
+        );
+        let got = read_private_key_from_env().expect("should resolve V2 name");
+        assert!(got.starts_with("0x1"));
+        std::env::remove_var("POLYMARKET_PRIVATE_KEY");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn private_key_falls_back_to_polybot_env_var() {
+        std::env::remove_var("POLYMARKET_PRIVATE_KEY");
+        std::env::set_var(
+            "POLYBOT_PRIVATE_KEY",
+            "0x2222222222222222222222222222222222222222222222222222222222222222",
+        );
+        let got = read_private_key_from_env().expect("should resolve legacy name");
+        assert!(got.starts_with("0x2"));
+        std::env::remove_var("POLYBOT_PRIVATE_KEY");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn private_key_missing_both_returns_error() {
+        std::env::remove_var("POLYMARKET_PRIVATE_KEY");
+        std::env::remove_var("POLYBOT_PRIVATE_KEY");
+        let result = read_private_key_from_env();
+        assert!(result.is_err(), "both unset should fail");
     }
 
     #[tokio::test]
