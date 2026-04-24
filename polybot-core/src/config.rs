@@ -53,6 +53,19 @@ fn default_fok_max_fee_bps() -> u32 {
     50
 }
 
+fn default_max_position_politics_usdc() -> Decimal {
+    rust_decimal_macros::dec!(250)
+}
+fn default_max_position_crypto_usdc() -> Decimal {
+    rust_decimal_macros::dec!(150)
+}
+fn default_max_position_sports_usdc() -> Decimal {
+    rust_decimal_macros::dec!(200)
+}
+fn default_max_position_other_usdc() -> Decimal {
+    rust_decimal_macros::dec!(100)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub system: SystemConfig,
@@ -100,6 +113,14 @@ pub struct RiskConfig {
     pub max_consecutive_losses: u32,
     #[serde(default = "default_loss_cooldown_secs")]
     pub loss_cooldown_secs: u64,
+    #[serde(default = "default_max_position_politics_usdc")]
+    pub max_position_politics_usdc: Decimal,
+    #[serde(default = "default_max_position_crypto_usdc")]
+    pub max_position_crypto_usdc: Decimal,
+    #[serde(default = "default_max_position_sports_usdc")]
+    pub max_position_sports_usdc: Decimal,
+    #[serde(default = "default_max_position_other_usdc")]
+    pub max_position_other_usdc: Decimal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -211,6 +232,10 @@ impl Default for AppConfig {
                 min_usdc_balance: default_min_usdc_balance(),
                 max_consecutive_losses: default_max_consecutive_losses(),
                 loss_cooldown_secs: default_loss_cooldown_secs(),
+                max_position_politics_usdc: default_max_position_politics_usdc(),
+                max_position_crypto_usdc: default_max_position_crypto_usdc(),
+                max_position_sports_usdc: default_max_position_sports_usdc(),
+                max_position_other_usdc: default_max_position_other_usdc(),
             },
             scanner: ScannerConfig {
                 watch_dir: "./signals".to_string(),
@@ -508,6 +533,27 @@ impl AppConfig {
             }
         }
 
+        if let Ok(val) = std::env::var("MAX_POSITION_POLITICS_USDC") {
+            if let Ok(d) = val.parse::<Decimal>() {
+                self.risk.max_position_politics_usdc = d;
+            }
+        }
+        if let Ok(val) = std::env::var("MAX_POSITION_CRYPTO_USDC") {
+            if let Ok(d) = val.parse::<Decimal>() {
+                self.risk.max_position_crypto_usdc = d;
+            }
+        }
+        if let Ok(val) = std::env::var("MAX_POSITION_SPORTS_USDC") {
+            if let Ok(d) = val.parse::<Decimal>() {
+                self.risk.max_position_sports_usdc = d;
+            }
+        }
+        if let Ok(val) = std::env::var("MAX_POSITION_OTHER_USDC") {
+            if let Ok(d) = val.parse::<Decimal>() {
+                self.risk.max_position_other_usdc = d;
+            }
+        }
+
         self.reconcile_system_mode();
     }
 }
@@ -697,5 +743,29 @@ mod tests {
         config.apply_env_overrides();
         assert_eq!(config.execution.fok_max_fee_bps, 20);
         std::env::remove_var("FOK_MAX_FEE_BPS");
+    }
+
+    #[test]
+    fn category_caps_default_to_prd_values() {
+        let config = AppConfig::default();
+        assert_eq!(config.risk.max_position_politics_usdc, rust_decimal_macros::dec!(250));
+        assert_eq!(config.risk.max_position_crypto_usdc, rust_decimal_macros::dec!(150));
+        assert_eq!(config.risk.max_position_sports_usdc, rust_decimal_macros::dec!(200));
+        assert_eq!(config.risk.max_position_other_usdc, rust_decimal_macros::dec!(100));
+    }
+
+    #[test]
+    fn category_caps_reads_from_env() {
+        std::env::set_var("MAX_POSITION_POLITICS_USDC", "500");
+        std::env::set_var("MAX_POSITION_CRYPTO_USDC", "300");
+        let mut config = AppConfig::default();
+        config.apply_env_overrides();
+        assert_eq!(config.risk.max_position_politics_usdc, rust_decimal_macros::dec!(500));
+        assert_eq!(config.risk.max_position_crypto_usdc, rust_decimal_macros::dec!(300));
+        // Unchanged defaults for the others.
+        assert_eq!(config.risk.max_position_sports_usdc, rust_decimal_macros::dec!(200));
+        assert_eq!(config.risk.max_position_other_usdc, rust_decimal_macros::dec!(100));
+        std::env::remove_var("MAX_POSITION_POLITICS_USDC");
+        std::env::remove_var("MAX_POSITION_CRYPTO_USDC");
     }
 }
