@@ -7,7 +7,7 @@ use polybot_common::constants::{
     confidence_multiplier, drawdown_multiplier as calc_drawdown, secret_level_multiplier,
 };
 use rust_decimal::prelude::ToPrimitive;
-use polybot_common::types::{Decision, RiskDecision, Signal};
+use polybot_common::types::{Decision, OrderDirection, RiskDecision, Signal};
 use rust_decimal::Decimal;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -94,6 +94,7 @@ impl RiskEngine {
                 signal_id: signal.signal_id.clone(),
                 market_id: signal.market_id.clone(),
                 side: signal.side,
+                direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
                 category: signal.category,
                 position_size_usd: Decimal::ZERO,
                 confidence_multiplier: Decimal::ZERO,
@@ -117,6 +118,7 @@ impl RiskEngine {
                 signal_id: signal.signal_id.clone(),
                 market_id: signal.market_id.clone(),
                 side: signal.side,
+                direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
                 category: signal.category,
                 position_size_usd: Decimal::ZERO,
                 confidence_multiplier: Decimal::ZERO,
@@ -134,6 +136,7 @@ impl RiskEngine {
                     signal_id: signal.signal_id.clone(),
                     market_id: signal.market_id.clone(),
                     side: signal.side,
+                    direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
                     category: signal.category,
                     position_size_usd: Decimal::ZERO,
                     confidence_multiplier: Decimal::ZERO,
@@ -152,6 +155,7 @@ impl RiskEngine {
                 signal_id: signal.signal_id.clone(),
                 market_id: signal.market_id.clone(),
                 side: signal.side,
+                direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
                 category: signal.category,
                 position_size_usd: Decimal::ZERO,
                 confidence_multiplier: Decimal::ZERO,
@@ -174,6 +178,7 @@ impl RiskEngine {
                             signal_id: signal.signal_id.clone(),
                             market_id: signal.market_id.clone(),
                             side: signal.side,
+                            direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
                             category: signal.category,
                             position_size_usd: Decimal::ZERO,
                             confidence_multiplier: Decimal::ZERO,
@@ -206,6 +211,7 @@ impl RiskEngine {
                 signal_id: signal.signal_id.clone(),
                 market_id: signal.market_id.clone(),
                 side: signal.side,
+                direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
                 category: signal.category,
                 position_size_usd: Decimal::ZERO,
                 confidence_multiplier: confidence_multiplier(signal.confidence),
@@ -231,6 +237,7 @@ impl RiskEngine {
                 signal_id: signal.signal_id.clone(),
                 market_id: signal.market_id.clone(),
                 side: signal.side,
+                direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
                 category: signal.category,
                 position_size_usd: Decimal::ZERO,
                 confidence_multiplier: confidence_multiplier(signal.confidence),
@@ -275,6 +282,7 @@ impl RiskEngine {
                 signal_id: signal.signal_id.clone(),
                 market_id: signal.market_id.clone(),
                 side: signal.side,
+                direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
                 category: signal.category,
                 position_size_usd: Decimal::ZERO,
                 confidence_multiplier: conf_mult,
@@ -320,6 +328,7 @@ impl RiskEngine {
                 signal_id: signal.signal_id.clone(),
                 market_id: signal.market_id.clone(),
                 side: signal.side,
+                direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
                 category: signal.category,
                 position_size_usd: Decimal::ZERO,
                 confidence_multiplier: conf_mult,
@@ -354,6 +363,7 @@ impl RiskEngine {
                 signal_id: signal.signal_id.clone(),
                 market_id: signal.market_id.clone(),
                 side: signal.side,
+                direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
                 category: signal.category,
                 position_size_usd: Decimal::ZERO,
                 confidence_multiplier: conf_mult,
@@ -369,6 +379,7 @@ impl RiskEngine {
             signal_id: signal.signal_id.clone(),
             market_id: signal.market_id.clone(),
             side: signal.side,
+            direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
             category: signal.category,
             position_size_usd: size,
             confidence_multiplier: conf_mult,

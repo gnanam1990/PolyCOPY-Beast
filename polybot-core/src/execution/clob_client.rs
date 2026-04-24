@@ -651,7 +651,10 @@ impl ClobClient {
         let signable_order = client
             .limit_order()
             .token_id(token_id)
-            .side(SdkSide::Buy)
+            .side(match order.direction {
+                polybot_common::types::OrderDirection::Buy => SdkSide::Buy,
+                polybot_common::types::OrderDirection::Sell => SdkSide::Sell,
+            })
             .price(order.price)
             .size(order.size)
             .order_type(sdk_order_type)
@@ -710,6 +713,7 @@ impl ClobClient {
             market_id: order.market_id.clone(),
             category: order.category,
             side: order.side,
+            direction: order.direction,
             price: order.price,
             size: order.size,
             size_usd: order.size_usd,

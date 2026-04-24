@@ -83,6 +83,30 @@ pub enum Side {
     No,
 }
 
+/// Order direction on the CLOB — distinct from [`Side`] (outcome token).
+/// `Side::{Yes, No}` selects which outcome token the order is against;
+/// `OrderDirection::{Buy, Sell}` is the direction of the trade on that token.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrderDirection {
+    #[default]
+    Buy,
+    Sell,
+}
+
+impl OrderDirection {
+    pub fn is_sell(&self) -> bool {
+        matches!(self, OrderDirection::Sell)
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OrderDirection::Buy => "buy",
+            OrderDirection::Sell => "sell",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OrderType {
@@ -322,6 +346,11 @@ pub struct RiskDecision {
     pub signal_id: String,
     pub market_id: String,
     pub side: Side,
+    /// CLOB order direction. Defaults to [`OrderDirection::Buy`] at every
+    /// construction site today; routed from the scanner once SELL signals
+    /// are emitted.
+    #[serde(default)]
+    pub direction: OrderDirection,
     pub category: Category,
     pub position_size_usd: Decimal,
     pub confidence_multiplier: Decimal,
@@ -374,6 +403,9 @@ pub struct Trade {
     pub market_id: String,
     pub category: Category,
     pub side: Side,
+    /// CLOB order direction this trade resulted from.
+    #[serde(default)]
+    pub direction: OrderDirection,
     pub price: Decimal,
     pub size: Decimal,
     pub size_usd: Decimal,
@@ -586,6 +618,7 @@ mod tests {
             market_id: "m1".to_string(),
             category: Category::Politics,
             side: Side::Yes,
+            direction: OrderDirection::Buy,
             price: dec!(0.65),
             size: dec!(100),
             size_usd: dec!(65),

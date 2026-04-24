@@ -171,7 +171,7 @@ impl PositionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use polybot_common::types::{OrderType, PositionKey, Side};
+    use polybot_common::types::{OrderDirection, OrderType, PositionKey, Side};
     use rust_decimal_macros::dec;
 
     fn test_trade(
@@ -187,6 +187,7 @@ mod tests {
             market_id: market_id.to_string(),
             category,
             side,
+            direction: OrderDirection::Buy,
             price,
             size: filled_size,
             size_usd: price * filled_size,

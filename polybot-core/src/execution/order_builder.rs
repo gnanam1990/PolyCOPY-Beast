@@ -11,6 +11,7 @@ pub struct Order {
     pub token_id: String,
     pub category: Category,
     pub side: Side,
+    pub direction: OrderDirection,
     pub price: Decimal,
     pub size: Decimal,
     pub size_usd: Decimal,
@@ -43,6 +44,7 @@ pub fn build_order(
         token_id: market_context.token_id.clone(),
         category: decision.category,
         side: decision.side,
+        direction: decision.direction,
         price,
         size,
         size_usd: normalized_size_usd,
@@ -58,11 +60,20 @@ pub fn build_order_with_price_buffer(
     price_buffer: Decimal,
     order_type: OrderType,
 ) -> Order {
+    // Direction-aware buffer: BUY pays slightly over market (round up),
+    // SELL accepts slightly under market (round down). Both tilt toward
+    // a more aggressive fill on their side.
     let planned_price = if order_type.requires_price_buffer() {
-        align_to_tick_size_up(
-            fetched_price * (Decimal::ONE + price_buffer),
-            market_context.tick_size,
-        )
+        match decision.direction {
+            OrderDirection::Buy => align_to_tick_size_up(
+                fetched_price * (Decimal::ONE + price_buffer),
+                market_context.tick_size,
+            ),
+            OrderDirection::Sell => align_to_tick_size(
+                fetched_price * (Decimal::ONE - price_buffer),
+                market_context.tick_size,
+            ),
+        }
     } else {
         fetched_price
     };
@@ -108,6 +119,7 @@ pub fn create_simulated_trade(decision: &RiskDecision, order: &Order) -> Trade {
         market_id: order.market_id.clone(),
         category: decision.category,
         side: order.side,
+        direction: order.direction,
         price: order.price,
         size: order.size,
         size_usd: order.size_usd,
@@ -127,10 +139,19 @@ mod tests {
     use rust_decimal_macros::dec;
 
     fn test_decision(conf_mult: Decimal, sl_mult: Decimal) -> RiskDecision {
+        test_decision_with_direction(conf_mult, sl_mult, OrderDirection::Buy)
+    }
+
+    fn test_decision_with_direction(
+        conf_mult: Decimal,
+        sl_mult: Decimal,
+        direction: OrderDirection,
+    ) -> RiskDecision {
         RiskDecision {
             signal_id: "test-id".to_string(),
             market_id: "market-1".to_string(),
             side: Side::No,
+            direction,
             category: Category::Crypto,
             position_size_usd: dec!(50),
             confidence_multiplier: conf_mult,
@@ -215,6 +236,64 @@ mod tests {
             OrderType::Fok,
         );
         assert_eq!(order.price, dec!(0.51));
+    }
+
+    #[test]
+    fn buy_fok_plan_applies_upward_price_buffer() {
+        let decision =
+            test_decision_with_direction(dec!(1.0), dec!(1.0), OrderDirection::Buy);
+        let ctx = test_market_context();
+        let order = build_order_with_price_buffer(
+            &decision,
+            &ctx,
+            dec!(0.50),
+            dec!(50),
+            dec!(0.02),
+            OrderType::Fok,
+        );
+        assert_eq!(order.price, dec!(0.51));
+        assert_eq!(order.direction, OrderDirection::Buy);
+    }
+
+    #[test]
+    fn sell_fok_plan_applies_reverse_price_buffer() {
+        let decision =
+            test_decision_with_direction(dec!(1.0), dec!(1.0), OrderDirection::Sell);
+        let ctx = test_market_context();
+        let order = build_order_with_price_buffer(
+            &decision,
+            &ctx,
+            dec!(0.50),
+            dec!(50),
+            dec!(0.02),
+            OrderType::Fok,
+        );
+        assert_eq!(order.price, dec!(0.49));
+        assert_eq!(order.direction, OrderDirection::Sell);
+    }
+
+    #[test]
+    fn build_order_propagates_direction() {
+        let ctx = test_market_context();
+        let buy =
+            test_decision_with_direction(dec!(1.0), dec!(1.0), OrderDirection::Buy);
+        let buy_order = build_order(&buy, &ctx, dec!(0.50), dec!(50));
+        assert_eq!(buy_order.direction, OrderDirection::Buy);
+
+        let sell =
+            test_decision_with_direction(dec!(1.0), dec!(1.0), OrderDirection::Sell);
+        let sell_order = build_order(&sell, &ctx, dec!(0.50), dec!(50));
+        assert_eq!(sell_order.direction, OrderDirection::Sell);
+    }
+
+    #[test]
+    fn simulated_trade_carries_direction() {
+        let ctx = test_market_context();
+        let decision =
+            test_decision_with_direction(dec!(1.0), dec!(1.0), OrderDirection::Sell);
+        let order = build_order(&decision, &ctx, dec!(0.50), dec!(50));
+        let trade = create_simulated_trade(&decision, &order);
+        assert_eq!(trade.direction, OrderDirection::Sell);
     }
 
     #[test]
