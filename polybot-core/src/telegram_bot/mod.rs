@@ -124,33 +124,22 @@ pub async fn start_telegram_bot(
 
     alerts::spawn_dispatcher(bot.clone(), auth.allowed_users(), metrics.clone(), alert_receiver);
 
+    let ctx = commands::CommandContext {
+        auth,
+        confirm_state,
+        rate_limiter,
+        risk_engine,
+        reconciler,
+        config,
+        metrics,
+        position_manager,
+    };
+
     let handler =
         Update::filter_message().branch(dptree::entry().filter_command::<Command>().endpoint(
             move |bot, msg, cmd| {
-                let auth = auth.clone();
-                let confirm_state = confirm_state.clone();
-                let rate_limiter = rate_limiter.clone();
-                let risk_engine = risk_engine.clone();
-                let reconciler = reconciler.clone();
-                let config = config.clone();
-                let metrics = metrics.clone();
-                let position_manager = position_manager.clone();
-                async move {
-                    commands::handle_command(
-                        bot,
-                        msg,
-                        cmd,
-                        auth,
-                        confirm_state,
-                        rate_limiter,
-                        risk_engine,
-                        reconciler,
-                        config,
-                        metrics,
-                        position_manager,
-                    )
-                    .await
-                }
+                let ctx = ctx.clone();
+                async move { commands::handle_command(bot, msg, cmd, ctx).await }
             },
         ));
 
