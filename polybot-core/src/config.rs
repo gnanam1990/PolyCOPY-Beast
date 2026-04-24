@@ -59,6 +59,8 @@ pub struct AppConfig {
     pub dashboard: DashboardConfig,
     #[serde(default)]
     pub relayer: Option<RelayerConfig>,
+    #[serde(default = "default_collateral_config")]
+    pub collateral: CollateralConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,6 +148,26 @@ pub struct RelayerConfig {
     pub api_key_address: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CollateralConfig {
+    /// V2 collateral token symbol. Always `"pUSD"` in v3.2.
+    pub token: String,
+    /// Address of the Collateral Onramp contract (USDC.e → pUSD wrapping).
+    /// Empty until provided via COLLATERAL_ONRAMP_ADDRESS env var.
+    pub onramp_address: String,
+    /// Polygon USDC.e token address. Defaults to the canonical
+    /// 0x2791Bca1... per PRD §6.
+    pub usdc_e_address: String,
+}
+
+fn default_collateral_config() -> CollateralConfig {
+    CollateralConfig {
+        token: "pUSD".to_string(),
+        onramp_address: String::new(),
+        usdc_e_address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".to_string(),
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -202,6 +224,7 @@ impl Default for AppConfig {
                 port: 8080,
             },
             relayer: None,
+            collateral: default_collateral_config(),
         }
     }
 }
@@ -445,6 +468,16 @@ impl AppConfig {
             }
         };
 
+        if let Ok(val) = std::env::var("COLLATERAL_ONRAMP_ADDRESS") {
+            self.collateral.onramp_address = val;
+        }
+        if let Ok(val) = std::env::var("USDC_E_ADDRESS") {
+            self.collateral.usdc_e_address = val;
+        }
+        if let Ok(val) = std::env::var("COLLATERAL_TOKEN") {
+            self.collateral.token = val;
+        }
+
         self.reconcile_system_mode();
     }
 }
@@ -579,5 +612,28 @@ mod tests {
         assert!(config.relayer.is_none(),
             "partial relayer config should be None, got {:?}", config.relayer);
         std::env::remove_var("RELAYER_URL");
+    }
+
+    #[test]
+    fn collateral_config_has_pusd_defaults() {
+        let config = AppConfig::default();
+        assert_eq!(config.collateral.token, "pUSD");
+        assert_eq!(
+            config.collateral.usdc_e_address,
+            "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+        );
+        assert_eq!(config.collateral.onramp_address, "");
+    }
+
+    #[test]
+    fn collateral_config_applies_env_overrides() {
+        std::env::set_var("COLLATERAL_ONRAMP_ADDRESS", "0xabcdef0000000000000000000000000000000000");
+        std::env::set_var("USDC_E_ADDRESS", "0x1111111111111111111111111111111111111111");
+        let mut config = AppConfig::default();
+        config.apply_env_overrides();
+        assert_eq!(config.collateral.onramp_address, "0xabcdef0000000000000000000000000000000000");
+        assert_eq!(config.collateral.usdc_e_address, "0x1111111111111111111111111111111111111111");
+        std::env::remove_var("COLLATERAL_ONRAMP_ADDRESS");
+        std::env::remove_var("USDC_E_ADDRESS");
     }
 }
