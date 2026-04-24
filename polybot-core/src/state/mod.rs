@@ -273,17 +273,18 @@ mod tests {
         std::env::set_var("POLYBOT_SQLITE_PATH", &sqlite_path);
 
         let store = sqlite::SqliteStore::open(&sqlite_path).unwrap();
-        store.insert_signal_log(
-            "signal-1",
-            &Utc::now().to_rfc3339(),
-            "0xabc123abc123abc123abc123abc123abc123abc1",
-            "m1",
-            7,
-            7,
-            "politics",
-            "YES",
-            "execute",
-        ).unwrap();
+        let timestamp = Utc::now().to_rfc3339();
+        store.insert_signal_log(&sqlite::SignalLogInsert {
+            signal_id: "signal-1",
+            timestamp: &timestamp,
+            wallet_address: "0xabc123abc123abc123abc123abc123abc123abc1",
+            market_id: "m1",
+            confidence: 7,
+            secret_level: 7,
+            category: "politics",
+            side: "YES",
+            disposition: "execute",
+        }).unwrap();
 
         let metrics = Arc::new(Metrics::new());
         let position_manager = Arc::new(Mutex::new(positions::PositionManager::new()));

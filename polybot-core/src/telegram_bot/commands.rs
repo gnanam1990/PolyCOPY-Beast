@@ -18,6 +18,21 @@ use polybot_common::types::{ExecutionMode, Position};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+/// Shared dependencies passed to every Telegram command handler.
+/// Constructed once at bot startup and cloned cheaply (all fields
+/// are Arcs).
+#[derive(Clone)]
+pub struct CommandContext {
+    pub auth: Arc<AuthService>,
+    pub confirm_state: Arc<ConfirmState>,
+    pub rate_limiter: Arc<CommandRateLimiter>,
+    pub risk_engine: Arc<RiskEngine>,
+    pub reconciler: Arc<Reconciler>,
+    pub config: Arc<AppConfig>,
+    pub metrics: Arc<Metrics>,
+    pub position_manager: Arc<Mutex<PositionManager>>,
+}
+
 fn resolve_report_period(period: Option<&str>) -> Result<&'static str, &'static str> {
     match period.map(|p| p.trim().to_lowercase()) {
         None => Ok("Daily"),
@@ -105,20 +120,27 @@ async fn confirm_mode_switch(
     ))
 }
 
-#[allow(clippy::too_many_arguments)] // TODO: refactor into an arg struct
 pub async fn handle_command(
     bot: Bot,
     msg: teloxide::types::Message,
     cmd: Command,
-    auth: Arc<AuthService>,
-    confirm_state: Arc<ConfirmState>,
-    rate_limiter: Arc<CommandRateLimiter>,
-    risk_engine: Arc<RiskEngine>,
-    reconciler: Arc<Reconciler>,
-    config: Arc<AppConfig>,
-    metrics: Arc<Metrics>,
-    position_manager: Arc<Mutex<PositionManager>>,
+    ctx: CommandContext,
 ) -> ResponseResult<()> {
+    // Destructure the context so the existing function body can continue
+    // to reference each dependency by its bare name. The context bundle
+    // exists purely to shrink the public call signature; inside we still
+    // want the short names.
+    let CommandContext {
+        auth,
+        confirm_state,
+        rate_limiter,
+        risk_engine,
+        reconciler,
+        config,
+        metrics,
+        position_manager,
+    } = ctx;
+
     let user_id = match msg.from {
         Some(user) => user.id.0,
         None => return Ok(()),

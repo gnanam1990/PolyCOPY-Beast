@@ -556,20 +556,22 @@ pub async fn run_risk_engine(
                 Decision::EmergencyStop => "emergency_stop".to_string(),
                 Decision::Skip(reason) => format!("skip:{}", reason),
             };
-            if let Err(e) = store.insert_signal_log(
-                &event.signal.signal_id,
-                &event.signal.timestamp,
-                &event.signal.wallet_address,
-                &event.signal.market_id,
-                event.signal.confidence,
-                event.signal.secret_level,
-                &event.signal.category.to_string(),
-                match event.signal.side {
-                    polybot_common::types::Side::Yes => "YES",
-                    polybot_common::types::Side::No => "NO",
-                },
-                &disposition,
-            ) {
+            let category_str = event.signal.category.to_string();
+            let side_str = match event.signal.side {
+                polybot_common::types::Side::Yes => "YES",
+                polybot_common::types::Side::No => "NO",
+            };
+            if let Err(e) = store.insert_signal_log(&crate::state::sqlite::SignalLogInsert {
+                signal_id: &event.signal.signal_id,
+                timestamp: &event.signal.timestamp,
+                wallet_address: &event.signal.wallet_address,
+                market_id: &event.signal.market_id,
+                confidence: event.signal.confidence,
+                secret_level: event.signal.secret_level,
+                category: &category_str,
+                side: side_str,
+                disposition: &disposition,
+            }) {
                 tracing::error!(error = %e, "Failed to persist signal log to SQLite");
             }
             // v3.0: Also persist to PRD-compliant signals table

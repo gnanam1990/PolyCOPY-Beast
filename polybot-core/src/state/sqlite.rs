@@ -5,6 +5,21 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::str::FromStr as _;
 
+/// Row to be written to the `signal_log` table. Mirrors the INSERT
+/// column order used by [`SqliteStore::insert_signal_log`]. Borrows
+/// all string fields so callers don't need to allocate.
+pub struct SignalLogInsert<'a> {
+    pub signal_id: &'a str,
+    pub timestamp: &'a str,
+    pub wallet_address: &'a str,
+    pub market_id: &'a str,
+    pub confidence: u8,
+    pub secret_level: u8,
+    pub category: &'a str,
+    pub side: &'a str,
+    pub disposition: &'a str,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignalLogEntry {
     pub signal_id: String,
@@ -247,23 +262,24 @@ impl SqliteStore {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)] // TODO: refactor into an arg struct
     pub fn insert_signal_log(
         &self,
-        signal_id: &str,
-        timestamp: &str,
-        wallet_address: &str,
-        market_id: &str,
-        confidence: u8,
-        secret_level: u8,
-        category: &str,
-        side: &str,
-        disposition: &str,
+        entry: &SignalLogInsert<'_>,
     ) -> Result<(), PolybotError> {
         self.conn.execute(
             "INSERT OR IGNORE INTO signal_log (signal_id, timestamp, wallet_address, market_id, confidence, secret_level, category, side, disposition, received_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))",
-            rusqlite::params![signal_id, timestamp, wallet_address, market_id, confidence, secret_level, category, side, disposition],
+            rusqlite::params![
+                entry.signal_id,
+                entry.timestamp,
+                entry.wallet_address,
+                entry.market_id,
+                entry.confidence,
+                entry.secret_level,
+                entry.category,
+                entry.side,
+                entry.disposition
+            ],
         ).map_err(|e| PolybotError::State(format!("Failed to insert signal log: {}", e)))?;
         Ok(())
     }
@@ -785,17 +801,17 @@ mod tests {
     fn insert_signal_log() {
         let store = SqliteStore::open_in_memory().unwrap();
         store
-            .insert_signal_log(
-                "sig-1",
-                "2026-04-14T12:00:00Z",
-                "0xabc",
-                "m1",
-                7,
-                6,
-                "politics",
-                "YES",
-                "execute",
-            )
+            .insert_signal_log(&SignalLogInsert {
+                signal_id: "sig-1",
+                timestamp: "2026-04-14T12:00:00Z",
+                wallet_address: "0xabc",
+                market_id: "m1",
+                confidence: 7,
+                secret_level: 6,
+                category: "politics",
+                side: "YES",
+                disposition: "execute",
+            })
             .unwrap();
     }
 
@@ -803,17 +819,17 @@ mod tests {
     fn latest_signals_returns_rows() {
         let store = SqliteStore::open_in_memory().unwrap();
         store
-            .insert_signal_log(
-                "sig-1",
-                "2026-04-14T12:00:00Z",
-                "0xabc",
-                "m1",
-                7,
-                6,
-                "politics",
-                "YES",
-                "execute",
-            )
+            .insert_signal_log(&SignalLogInsert {
+                signal_id: "sig-1",
+                timestamp: "2026-04-14T12:00:00Z",
+                wallet_address: "0xabc",
+                market_id: "m1",
+                confidence: 7,
+                secret_level: 6,
+                category: "politics",
+                side: "YES",
+                disposition: "execute",
+            })
             .unwrap();
 
         let signals = store.latest_signals(10).unwrap();
