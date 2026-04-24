@@ -466,17 +466,19 @@ pub struct FeeSchedule {
 
 impl FeeSchedule {
     /// Taker fee in true basis points (PRD units / 100).
-    pub fn taker_bps(&self) -> u32 {
+    /// The `_true` suffix avoids a visual collision with the raw
+    /// `taker_fee_bps` field, which stores basis points × 100.
+    pub fn taker_bps_true(&self) -> u32 {
         self.taker_fee_bps / 100
     }
 
     /// Maker fee in true basis points.
-    pub fn maker_bps(&self) -> u32 {
+    pub fn maker_bps_true(&self) -> u32 {
         self.maker_fee_bps / 100
     }
 
     /// Maker rebate in true basis points.
-    pub fn rebate_bps(&self) -> u32 {
+    pub fn rebate_bps_true(&self) -> u32 {
         self.rebate_bps / 100
     }
 }
@@ -781,9 +783,9 @@ mod tests {
     #[test]
     fn fee_schedule_converts_bps_hundredths_to_bps() {
         let fs = FeeSchedule { taker_fee_bps: 12500, maker_fee_bps: 0, rebate_bps: 2500 };
-        assert_eq!(fs.taker_bps(), 125);
-        assert_eq!(fs.maker_bps(), 0);
-        assert_eq!(fs.rebate_bps(), 25);
+        assert_eq!(fs.taker_bps_true(), 125);
+        assert_eq!(fs.maker_bps_true(), 0);
+        assert_eq!(fs.rebate_bps_true(), 25);
     }
 
     #[test]
