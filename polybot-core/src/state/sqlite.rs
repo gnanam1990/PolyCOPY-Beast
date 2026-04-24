@@ -118,6 +118,8 @@ impl SqliteStore {
     pub fn open(db_path: &Path) -> Result<Self, PolybotError> {
         let conn = rusqlite::Connection::open(db_path)
             .map_err(|e| PolybotError::State(format!("Failed to open SQLite: {}", e)))?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(|e| PolybotError::State(format!("Failed to enable FK enforcement: {}", e)))?;
         let store = Self { conn };
         store.create_tables()?;
         Ok(store)
@@ -126,6 +128,8 @@ impl SqliteStore {
     pub fn open_in_memory() -> Result<Self, PolybotError> {
         let conn = rusqlite::Connection::open_in_memory()
             .map_err(|e| PolybotError::State(format!("Failed to open in-memory SQLite: {}", e)))?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(|e| PolybotError::State(format!("Failed to enable FK enforcement: {}", e)))?;
         let store = Self { conn };
         store.create_tables()?;
         Ok(store)
@@ -1403,6 +1407,30 @@ mod migration_runner_tests {
                 cols
             );
         }
+    }
+
+    #[test]
+    fn foreign_keys_are_enforced() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let fk_on: i64 = store
+            .conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fk_on, 1, "PRAGMA foreign_keys should be ON");
+
+        // Write a transactions row that references a non-existent trade.
+        let result = store.conn.execute(
+            "INSERT INTO transactions
+                (transaction_id, trade_id, type, state, submitted_at)
+             VALUES ('tx-orphan', 'trade-does-not-exist', 'order', 'STATE_NEW',
+                     '2026-04-24T00:00:00Z')",
+            [],
+        );
+        assert!(
+            result.is_err(),
+            "FK constraint should reject orphan trade_id, got Ok({:?})",
+            result
+        );
     }
 }
 
