@@ -294,6 +294,11 @@ impl SqliteStore {
         self.run_migrations()
     }
 
+    // TODO(phase2): extend column list to include V2 fields
+    // (transaction_id, transaction_hash, relayer_state, taker_fee_bps,
+    // fee_paid_usdc, rebate_usdc, retry_count, error_msg). INSERT OR REPLACE
+    // currently wipes those columns back to SQL defaults on every write; any
+    // V2 writer must not land until this is updated.
     pub fn insert_trade(&self, trade: &Trade) -> Result<(), PolybotError> {
         self.conn.execute(
             "INSERT OR REPLACE INTO trades (id, signal_id, market_id, category, side, price, size, size_usd, filled_size, order_type, status, placed_at, filled_at, simulated)
