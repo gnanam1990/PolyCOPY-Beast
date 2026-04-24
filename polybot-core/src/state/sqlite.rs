@@ -940,6 +940,7 @@ mod tests {
             resolved: false,
             redeemable: false,
             suggested_size_usdc: None,
+            fee_schedule: None,
             scanner_version: "1.0.0".to_string(),
         };
         store.insert_signal(&signal, "polling", "YES", "executed").unwrap();

@@ -193,6 +193,8 @@ pub struct Signal {
     pub redeemable: bool,
     #[serde(default)]
     pub suggested_size_usdc: Option<Decimal>,
+    #[serde(default)]
+    pub fee_schedule: Option<FeeSchedule>,
     #[serde(default = "default_scanner_version")]
     pub scanner_version: String,
 }
@@ -594,6 +596,7 @@ mod tests {
             resolved: false,
             redeemable: false,
             suggested_size_usdc: Some(dec!(50)),
+            fee_schedule: None,
             scanner_version: "1.0.0".to_string(),
         }
     }
@@ -805,5 +808,40 @@ mod tests {
         assert!(!TransactionState::Submitted.is_terminal());
         assert!(TransactionState::Success.is_terminal());
         assert!(TransactionState::Failed.is_terminal());
+    }
+
+    #[test]
+    fn signal_deserializes_v1_payload_without_fee_schedule() {
+        let v1_json = r#"{
+            "signal_id": "11111111-1111-4111-8111-111111111111",
+            "timestamp": "2026-04-24T13:45:22.123Z",
+            "wallet_address": "0x0000000000000000000000000000000000000001",
+            "market_id": "mkt-1",
+            "side": "YES",
+            "confidence": 7,
+            "secret_level": 6,
+            "category": "politics"
+        }"#;
+        let sig: Signal = serde_json::from_str(v1_json).unwrap();
+        assert!(sig.fee_schedule.is_none());
+    }
+
+    #[test]
+    fn signal_deserializes_v2_payload_with_fee_schedule() {
+        let v2_json = r#"{
+            "signal_id": "22222222-2222-4222-8222-222222222222",
+            "timestamp": "2026-04-24T13:45:22.123Z",
+            "wallet_address": "0x0000000000000000000000000000000000000002",
+            "market_id": "mkt-2",
+            "side": "NO",
+            "confidence": 8,
+            "secret_level": 7,
+            "category": "crypto",
+            "fee_schedule": {"takerFee": 12500, "makerFee": 0, "rebate": 2500}
+        }"#;
+        let sig: Signal = serde_json::from_str(v2_json).unwrap();
+        let fs = sig.fee_schedule.expect("fee_schedule present");
+        assert_eq!(fs.taker_fee_bps, 12500);
+        assert_eq!(fs.rebate_bps, 2500);
     }
 }

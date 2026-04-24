@@ -102,6 +102,7 @@ mod tests {
             resolved: false,
             redeemable: false,
             suggested_size_usdc: Some(dec!(50)),
+            fee_schedule: None,
             scanner_version: "1.0.0".to_string(),
         }
     }
