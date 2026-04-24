@@ -7,7 +7,7 @@ pub mod sqlite;
 
 use chrono::{DateTime, Utc};
 use polybot_common::errors::PolybotError;
-use polybot_common::types::{PositionKey, Trade, TradeStatus};
+use polybot_common::types::{PositionKey, Trade, TradeStatus, TransactionKind, TransactionRecord};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -175,6 +175,35 @@ fn update_copied_lot_from_trade(
     }
 }
 
+fn persist_transaction_for_trade(
+    store: &sqlite::SqliteStore,
+    trade: &Trade,
+) -> Result<(), PolybotError> {
+    let Some(transaction_id) = trade.transaction_id.as_ref() else {
+        return Ok(());
+    };
+    let Some(state) = trade.relayer_state else {
+        return Ok(());
+    };
+
+    let record = TransactionRecord {
+        transaction_id: transaction_id.clone(),
+        trade_id: Some(trade.id.clone()),
+        kind: TransactionKind::Order,
+        state,
+        submitted_at: trade.placed_at,
+        confirmed_at: if state.is_terminal() {
+            trade.filled_at.or(Some(Utc::now()))
+        } else {
+            None
+        },
+        transaction_hash: trade.transaction_hash.clone(),
+        error_msg: trade.error_msg.clone(),
+    };
+
+    store.insert_transaction(&record)
+}
+
 pub async fn force_flatten_positions(
     metrics: Arc<Metrics>,
     position_manager: Arc<Mutex<positions::PositionManager>>,
@@ -239,6 +268,9 @@ async fn run_in_memory(
         let sqlite_store = sqlite_path.and_then(|path| sqlite::SqliteStore::open(std::path::Path::new(path)).ok());
 
         if let Some(store) = sqlite_store.as_ref() {
+            if let Err(e) = persist_transaction_for_trade(store, &trade) {
+                tracing::error!(error = %e, "Failed to persist relayer transaction for trade");
+            }
             if let Err(e) = update_copied_lot_from_trade(store, &trade) {
                 tracing::error!(error = %e, "Failed to update copied lot from trade fill");
             }
@@ -626,6 +658,47 @@ mod tests {
             )
             .unwrap();
         assert!(copied_lot.is_none());
+
+        let _ = std::fs::remove_file(sqlite_path);
+        std::env::remove_var("POLYBOT_SQLITE_PATH");
+    }
+
+    #[tokio::test]
+    async fn run_in_memory_persists_transaction_row_for_pending_trade() {
+        let sqlite_path = std::env::temp_dir().join(format!("polybot-state-{}.db", uuid::Uuid::new_v4()));
+        std::env::set_var("POLYBOT_SQLITE_PATH", &sqlite_path);
+
+        let metrics = Arc::new(Metrics::new());
+        let position_manager = Arc::new(Mutex::new(positions::PositionManager::new()));
+        let market_prices = Arc::new(RwLock::new(HashMap::new()));
+        let (tx, rx) = mpsc::channel(4);
+        let config = AppConfig::default();
+
+        let mut trade = test_trade("m1", Side::Yes, Category::Politics);
+        trade.simulated = false;
+        trade.status = TradeStatus::Pending;
+        trade.transaction_id = Some("txn_abc123".to_string());
+        trade.relayer_state = Some(polybot_common::types::TransactionState::New);
+
+        tx.send(trade).await.unwrap();
+        drop(tx);
+
+        run_in_memory(
+            rx,
+            metrics,
+            position_manager,
+            market_prices,
+            Some(sqlite_path.to_string_lossy().as_ref()),
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let reopened = sqlite::SqliteStore::open(&sqlite_path).unwrap();
+        let transaction = reopened.get_transaction("txn_abc123").unwrap().unwrap();
+        assert_eq!(transaction.trade_id.as_deref(), Some("trade-m1-Yes"));
+        assert_eq!(transaction.kind, TransactionKind::Order);
+        assert_eq!(transaction.state, polybot_common::types::TransactionState::New);
 
         let _ = std::fs::remove_file(sqlite_path);
         std::env::remove_var("POLYBOT_SQLITE_PATH");

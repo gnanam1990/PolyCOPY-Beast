@@ -20,6 +20,8 @@ use uuid::Uuid;
 use super::order_builder::Order;
 use super::rate_limiter::ClobRateLimiter;
 use super::retry::{RetryClass, classify_sdk_error};
+use super::v2_client::RelayerClient;
+use super::v2_signing::{build_v2_order_payload, payload_to_relayer_json, sign_v2_order_payload};
 
 /// Reads the Polymarket EOA private key from the environment.
 ///
@@ -403,6 +405,57 @@ fn map_trade_status_and_fill(
     (status, filled_size, size_usd)
 }
 
+fn map_submit_response_to_trade(
+    order: &Order,
+    response: &crate::execution::v2_client::RelayerSubmitResponse,
+) -> Result<Trade, PolybotError> {
+    Ok(Trade {
+        id: uuid::Uuid::new_v4().to_string(),
+        signal_id: order.signal_id.clone(),
+        source_wallet: order.source_wallet.clone(),
+        market_id: order.market_id.clone(),
+        category: order.category,
+        side: order.side,
+        direction: order.direction,
+        price: order.price,
+        size: order.size,
+        size_usd: order.size_usd,
+        filled_size: Decimal::ZERO,
+        order_type: order.order_type,
+        status: polybot_common::types::TradeStatus::Pending,
+        placed_at: chrono::Utc::now(),
+        filled_at: None,
+        simulated: false,
+        transaction_id: Some(response.transaction_id.clone()),
+        transaction_hash: None,
+        relayer_state: Some(crate::execution::v2_client::map_transaction_state(&response.state)?),
+        taker_fee_bps: 0,
+        fee_paid_usdc: Decimal::ZERO,
+        rebate_usdc: Decimal::ZERO,
+        retry_count: 0,
+        error_msg: None,
+    })
+}
+
+fn map_terminal_relayer_state_to_trade(
+    mut trade: Trade,
+    response: &crate::execution::v2_client::RelayerTransactionResponse,
+) -> Result<Trade, PolybotError> {
+    let state = crate::execution::v2_client::map_transaction_state(&response.state)?;
+    trade.relayer_state = Some(state);
+    trade.transaction_hash = response.transaction_hash.clone();
+    if matches!(state, polybot_common::types::TransactionState::Failed) {
+        trade.status = polybot_common::types::TradeStatus::Failed(
+            response
+                .error_msg
+                .clone()
+                .unwrap_or_else(|| "Relayer transaction failed".to_string()),
+        );
+        trade.error_msg = response.error_msg.clone();
+    }
+    Ok(trade)
+}
+
 impl ClobClient {
     /// Create a new CLOB client with the given configuration.
     pub fn new(config: ClobConfig) -> Self {
@@ -721,6 +774,48 @@ impl ClobClient {
             .await
             .map_err(|e| PolybotError::Execution(format!("Failed to cancel open CLOB orders: {}", e)))?;
         Ok(())
+    }
+
+    pub async fn submit_order_v2(
+        &self,
+        order: &Order,
+        relayer: &crate::config::RelayerConfig,
+        builder_code: &str,
+    ) -> Result<Trade, SubmitOrderError> {
+        if !self.rate_limiter.check_write().await {
+            return Err(SubmitOrderError::non_retryable(PolybotError::Execution(
+                "CLOB rate limit circuit breaker is open — too many requests".to_string(),
+            )));
+        }
+        self.rate_limiter.record_write().await;
+
+        let signer = self.local_signer().map_err(SubmitOrderError::from)?;
+        let maker = self.trading_wallet_address().map_err(SubmitOrderError::from)?;
+        let payload = build_v2_order_payload(
+            order,
+            &maker.to_string(),
+            &signer.address().to_string(),
+            builder_code,
+            chrono::Utc::now().timestamp_millis() as u64,
+        )
+        .map_err(SubmitOrderError::from)?;
+        let signature = sign_v2_order_payload(&signer, &payload)
+            .await
+            .map_err(SubmitOrderError::from)?;
+        let mut signed_payload = payload.clone();
+        signed_payload.signature = signature;
+        let signed_order = payload_to_relayer_json(&signed_payload);
+        let relayer_client = RelayerClient::new(relayer).map_err(SubmitOrderError::from)?;
+        let submit_response = relayer_client
+            .submit_order(signed_order)
+            .await
+            .map_err(SubmitOrderError::from)?;
+        let trade = map_submit_response_to_trade(order, &submit_response).map_err(SubmitOrderError::from)?;
+        let terminal = relayer_client
+            .poll_transaction_until_terminal(&submit_response.transaction_id, 10, std::time::Duration::from_millis(10))
+            .await
+            .map_err(SubmitOrderError::from)?;
+        map_terminal_relayer_state_to_trade(trade, &terminal).map_err(SubmitOrderError::from)
     }
 
     /// Submit a signed order to the CLOB.
@@ -1068,8 +1163,8 @@ impl ClobClient {
 mod tests {
     use super::*;
     use crate::execution::order_builder::Order;
-    use polybot_common::types::{Category, OrderType};
-    use polybot_common::types::TradeDirection;
+    use crate::execution::v2_client::RelayerSubmitResponse;
+    use polybot_common::types::{Category, OrderType, TradeDirection, TradeStatus};
     use std::path::PathBuf;
 
     fn test_config() -> ClobConfig {
@@ -1383,5 +1478,42 @@ mod tests {
         assert_eq!(status, polybot_common::types::TradeStatus::PartiallyFilled);
         assert_eq!(filled_size, dec!(3));
         assert_eq!(size_usd, dec!(1.5));
+    }
+
+    #[test]
+    fn relayer_submit_creates_pending_trade_with_transaction_id() {
+        let order = test_order(TradeDirection::Buy);
+        let response = crate::execution::v2_client::RelayerSubmitResponse {
+            transaction_id: "txn_abc123".to_string(),
+            state: "STATE_NEW".to_string(),
+        };
+
+        let trade = map_submit_response_to_trade(&order, &response).unwrap();
+
+        assert_eq!(trade.transaction_id.as_deref(), Some("txn_abc123"));
+        assert_eq!(trade.relayer_state, Some(polybot_common::types::TransactionState::New));
+        assert_eq!(trade.status, TradeStatus::Pending);
+        assert_eq!(trade.filled_size, Decimal::ZERO);
+    }
+
+    #[test]
+    fn terminal_relayer_failure_marks_trade_failed() {
+        let order = test_order(TradeDirection::Buy);
+        let submit = RelayerSubmitResponse {
+            transaction_id: "txn_abc123".to_string(),
+            state: "STATE_NEW".to_string(),
+        };
+        let trade = map_submit_response_to_trade(&order, &submit).unwrap();
+        let terminal = crate::execution::v2_client::RelayerTransactionResponse {
+            transaction_id: "txn_abc123".to_string(),
+            state: "STATE_FAILED".to_string(),
+            transaction_hash: None,
+            error_msg: Some("relayer reverted".to_string()),
+        };
+
+        let updated = map_terminal_relayer_state_to_trade(trade, &terminal).unwrap();
+
+        assert_eq!(updated.relayer_state, Some(polybot_common::types::TransactionState::Failed));
+        assert!(matches!(updated.status, TradeStatus::Failed(_)));
     }
 }

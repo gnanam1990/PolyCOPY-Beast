@@ -170,6 +170,10 @@ fn default_trade_direction() -> TradeDirection {
     TradeDirection::Buy
 }
 
+fn default_source_wallet() -> String {
+    String::new()
+}
+
 /// Signal schema (v2.5 base with Module 1 extensions for core fields).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Signal {
@@ -409,10 +413,12 @@ impl PositionKey {
 pub struct Trade {
     pub id: String,
     pub signal_id: String,
+    #[serde(default = "default_source_wallet")]
     pub source_wallet: String,
     pub market_id: String,
     pub category: Category,
     pub side: Side,
+    #[serde(default = "default_trade_direction")]
     pub direction: TradeDirection,
     pub price: Decimal,
     pub size: Decimal,
