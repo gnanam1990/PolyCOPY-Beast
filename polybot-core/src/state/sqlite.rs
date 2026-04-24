@@ -1168,4 +1168,32 @@ mod migration_runner_tests {
             );
         }
     }
+
+    #[test]
+    fn trades_table_has_v2_relayer_columns() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut stmt = store.conn.prepare("PRAGMA table_info(trades)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for required in [
+            "transaction_id",
+            "transaction_hash",
+            "relayer_state",
+            "taker_fee_bps",
+            "fee_paid_usdc",
+            "rebate_usdc",
+            "retry_count",
+            "error_msg",
+        ] {
+            assert!(
+                cols.iter().any(|c| c == required),
+                "trades missing V2 column: {} (have {:?})",
+                required,
+                cols
+            );
+        }
+    }
 }

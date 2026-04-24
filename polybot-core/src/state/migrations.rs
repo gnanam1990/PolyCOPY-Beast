@@ -50,4 +50,18 @@ pub const MIGRATIONS: &[Migration] = &[
             ALTER TABLE signals ADD COLUMN rebate_bps    INTEGER NOT NULL DEFAULT 0;
         "#,
     },
+    Migration {
+        version: 4,
+        description: "V2: add relayer + fee columns to trades",
+        sql: r#"
+            ALTER TABLE trades ADD COLUMN transaction_id   TEXT;
+            ALTER TABLE trades ADD COLUMN transaction_hash TEXT;
+            ALTER TABLE trades ADD COLUMN relayer_state    TEXT;
+            ALTER TABLE trades ADD COLUMN taker_fee_bps    INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE trades ADD COLUMN fee_paid_usdc    TEXT NOT NULL DEFAULT '0';
+            ALTER TABLE trades ADD COLUMN rebate_usdc      TEXT NOT NULL DEFAULT '0';
+            ALTER TABLE trades ADD COLUMN retry_count      INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE trades ADD COLUMN error_msg        TEXT;
+        "#,
+    },
 ];
