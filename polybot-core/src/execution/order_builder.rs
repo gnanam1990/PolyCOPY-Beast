@@ -7,11 +7,12 @@ use super::clob_client::MarketContext;
 #[derive(Debug, Clone)]
 pub struct Order {
     pub signal_id: String,
+    pub source_wallet: String,
     pub market_id: String,
     pub token_id: String,
     pub category: Category,
     pub side: Side,
-    pub direction: OrderDirection,
+    pub direction: TradeDirection,
     pub price: Decimal,
     pub size: Decimal,
     pub size_usd: Decimal,
@@ -26,20 +27,27 @@ pub fn build_order(
 ) -> Order {
     let order_type = select_order_type(decision);
     let price = align_to_tick_size(target_price, market_context.tick_size);
-    let normalized_size_usd = size_usd.round_dp(2);
-    let raw_size = if price > Decimal::ZERO {
-        (normalized_size_usd / price).round_dp(2)
+    let (size, normalized_size_usd) = if let Some(target_size_tokens) = decision.target_size_tokens {
+        let size = target_size_tokens.round_dp(2).max(Decimal::ZERO);
+        (size, (size * price).round_dp(2))
     } else {
-        Decimal::ZERO
-    };
-    let size = if raw_size > Decimal::ZERO && raw_size < market_context.min_order_size {
-        market_context.min_order_size
-    } else {
-        raw_size
+        let normalized_size_usd = size_usd.round_dp(2);
+        let raw_size = if price > Decimal::ZERO {
+            (normalized_size_usd / price).round_dp(2)
+        } else {
+            Decimal::ZERO
+        };
+        let size = if raw_size > Decimal::ZERO && raw_size < market_context.min_order_size {
+            market_context.min_order_size
+        } else {
+            raw_size
+        };
+        (size, normalized_size_usd)
     };
 
     Order {
         signal_id: decision.signal_id.clone(),
+        source_wallet: decision.source_wallet.clone(),
         market_id: decision.market_id.clone(),
         token_id: market_context.token_id.clone(),
         category: decision.category,
@@ -65,11 +73,11 @@ pub fn build_order_with_price_buffer(
     // a more aggressive fill on their side.
     let planned_price = if order_type.requires_price_buffer() {
         match decision.direction {
-            OrderDirection::Buy => align_to_tick_size_up(
+            TradeDirection::Buy => align_to_tick_size_up(
                 fetched_price * (Decimal::ONE + price_buffer),
                 market_context.tick_size,
             ),
-            OrderDirection::Sell => align_to_tick_size(
+            TradeDirection::Sell => align_to_tick_size(
                 fetched_price * (Decimal::ONE - price_buffer),
                 market_context.tick_size,
             ),
@@ -116,6 +124,7 @@ pub fn create_simulated_trade(decision: &RiskDecision, order: &Order) -> Trade {
     Trade {
         id: uuid::Uuid::new_v4().to_string(),
         signal_id: decision.signal_id.clone(),
+        source_wallet: order.source_wallet.clone(),
         market_id: order.market_id.clone(),
         category: decision.category,
         side: order.side,
@@ -139,21 +148,23 @@ mod tests {
     use rust_decimal_macros::dec;
 
     fn test_decision(conf_mult: Decimal, sl_mult: Decimal) -> RiskDecision {
-        test_decision_with_direction(conf_mult, sl_mult, OrderDirection::Buy)
+        test_decision_with_direction(conf_mult, sl_mult, TradeDirection::Buy)
     }
 
     fn test_decision_with_direction(
         conf_mult: Decimal,
         sl_mult: Decimal,
-        direction: OrderDirection,
+        direction: TradeDirection,
     ) -> RiskDecision {
         RiskDecision {
             signal_id: "test-id".to_string(),
+            source_wallet: "0xabc123abc123abc123abc123abc123abc123abc1".to_string(),
             market_id: "market-1".to_string(),
             side: Side::No,
             direction,
             category: Category::Crypto,
             position_size_usd: dec!(50),
+            target_size_tokens: None,
             confidence_multiplier: conf_mult,
             secret_level_multiplier: sl_mult,
             drawdown_factor: dec!(1.0),
@@ -197,6 +208,43 @@ mod tests {
     }
 
     #[test]
+    fn simulated_trade_preserves_direction_and_source_wallet() {
+        let decision = RiskDecision {
+            signal_id: "sig-1".to_string(),
+            source_wallet: "0xabc123abc123abc123abc123abc123abc123abc1".to_string(),
+            market_id: "market-1".to_string(),
+            side: Side::Yes,
+            direction: TradeDirection::Sell,
+            category: Category::Politics,
+            position_size_usd: dec!(25),
+            target_size_tokens: Some(dec!(50)),
+            confidence_multiplier: dec!(1),
+            secret_level_multiplier: dec!(1),
+            drawdown_factor: dec!(1),
+            blocked: false,
+            manual_review: false,
+            decision: Decision::Execute,
+        };
+
+        let order = build_order(&decision, &test_market_context(), dec!(0.50), dec!(25));
+        let trade = create_simulated_trade(&decision, &order);
+
+        assert_eq!(trade.direction, TradeDirection::Sell);
+        assert_eq!(trade.source_wallet, decision.source_wallet);
+    }
+
+    #[test]
+    fn simulated_trade_uses_order_source_wallet() {
+        let decision = test_decision(dec!(1.0), dec!(1.0));
+        let mut order = build_order(&decision, &test_market_context(), dec!(0.50), dec!(50));
+        order.source_wallet = "0xdef456def456def456def456def456def456def4".to_string();
+
+        let trade = create_simulated_trade(&decision, &order);
+
+        assert_eq!(trade.source_wallet, order.source_wallet);
+    }
+
+    #[test]
     fn build_order_preserves_signal_context() {
         let decision = test_decision(dec!(1.0), dec!(1.0));
         let order = build_order(&decision, &test_market_context(), dec!(0.25), dec!(50));
@@ -204,9 +252,36 @@ mod tests {
         assert_eq!(order.market_id, "market-1");
         assert_eq!(order.token_id, "token-1");
         assert_eq!(order.side, Side::No);
+        assert_eq!(order.direction, TradeDirection::Buy);
+        assert_eq!(
+            order.source_wallet,
+            "0xabc123abc123abc123abc123abc123abc123abc1"
+        );
         assert_eq!(order.price, dec!(0.25));
         assert_eq!(order.size_usd, dec!(50));
         assert_eq!(order.size, dec!(200));
+    }
+
+    #[test]
+    fn sell_target_token_size_survives_price_drift() {
+        let mut decision = test_decision(dec!(1.0), dec!(1.0));
+        decision.direction = TradeDirection::Sell;
+        decision.side = Side::Yes;
+        decision.position_size_usd = dec!(2.00);
+        decision.target_size_tokens = Some(dec!(4));
+
+        let order = build_order_with_price_buffer(
+            &decision,
+            &test_market_context(),
+            dec!(0.60),
+            dec!(2.00),
+            dec!(0.10),
+            OrderType::Fok,
+        );
+
+        assert_eq!(order.price, dec!(0.54));
+        assert_eq!(order.size, dec!(4));
+        assert_eq!(order.size_usd, dec!(2.16));
     }
 
     #[test]
@@ -241,7 +316,7 @@ mod tests {
     #[test]
     fn buy_fok_plan_applies_upward_price_buffer() {
         let decision =
-            test_decision_with_direction(dec!(1.0), dec!(1.0), OrderDirection::Buy);
+            test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Buy);
         let ctx = test_market_context();
         let order = build_order_with_price_buffer(
             &decision,
@@ -252,13 +327,13 @@ mod tests {
             OrderType::Fok,
         );
         assert_eq!(order.price, dec!(0.51));
-        assert_eq!(order.direction, OrderDirection::Buy);
+        assert_eq!(order.direction, TradeDirection::Buy);
     }
 
     #[test]
     fn sell_fok_plan_applies_reverse_price_buffer() {
         let decision =
-            test_decision_with_direction(dec!(1.0), dec!(1.0), OrderDirection::Sell);
+            test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Sell);
         let ctx = test_market_context();
         let order = build_order_with_price_buffer(
             &decision,
@@ -269,31 +344,31 @@ mod tests {
             OrderType::Fok,
         );
         assert_eq!(order.price, dec!(0.49));
-        assert_eq!(order.direction, OrderDirection::Sell);
+        assert_eq!(order.direction, TradeDirection::Sell);
     }
 
     #[test]
     fn build_order_propagates_direction() {
         let ctx = test_market_context();
         let buy =
-            test_decision_with_direction(dec!(1.0), dec!(1.0), OrderDirection::Buy);
+            test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Buy);
         let buy_order = build_order(&buy, &ctx, dec!(0.50), dec!(50));
-        assert_eq!(buy_order.direction, OrderDirection::Buy);
+        assert_eq!(buy_order.direction, TradeDirection::Buy);
 
         let sell =
-            test_decision_with_direction(dec!(1.0), dec!(1.0), OrderDirection::Sell);
+            test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Sell);
         let sell_order = build_order(&sell, &ctx, dec!(0.50), dec!(50));
-        assert_eq!(sell_order.direction, OrderDirection::Sell);
+        assert_eq!(sell_order.direction, TradeDirection::Sell);
     }
 
     #[test]
     fn simulated_trade_carries_direction() {
         let ctx = test_market_context();
         let decision =
-            test_decision_with_direction(dec!(1.0), dec!(1.0), OrderDirection::Sell);
+            test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Sell);
         let order = build_order(&decision, &ctx, dec!(0.50), dec!(50));
         let trade = create_simulated_trade(&decision, &order);
-        assert_eq!(trade.direction, OrderDirection::Sell);
+        assert_eq!(trade.direction, TradeDirection::Sell);
     }
 
     #[test]

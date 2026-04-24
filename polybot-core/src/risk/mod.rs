@@ -7,7 +7,7 @@ use polybot_common::constants::{
     confidence_multiplier, drawdown_multiplier as calc_drawdown, secret_level_multiplier,
 };
 use rust_decimal::prelude::ToPrimitive;
-use polybot_common::types::{Decision, OrderDirection, RiskDecision, Signal};
+use polybot_common::types::{Decision, RiskDecision, Signal, TradeDirection};
 use rust_decimal::Decimal;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -20,6 +20,43 @@ use crate::risk::balance::DynamicBaseSize;
 use crate::state::positions::PositionManager;
 use crate::state::sqlite::SqliteStore;
 use crate::telegram_bot::alerts::AlertBroadcaster;
+
+fn sold_tokens_from_signal(signal: &Signal) -> Decimal {
+    signal
+        .target_size_tokens
+        .or_else(|| {
+            signal.target_size_usdc.and_then(|size_usdc| {
+                signal
+                    .target_price
+                    .filter(|price| *price > Decimal::ZERO)
+                    .map(|price| (size_usdc / price).round_dp(8))
+            })
+        })
+        .unwrap_or(Decimal::ZERO)
+}
+
+fn mirrored_exit_tokens(
+    copied_tokens: Decimal,
+    sold_tokens: Decimal,
+    remaining_source_tokens: Option<Decimal>,
+) -> Option<Decimal> {
+    let remaining_source_tokens = remaining_source_tokens?;
+    if copied_tokens <= Decimal::ZERO || sold_tokens <= Decimal::ZERO || remaining_source_tokens < Decimal::ZERO {
+        return None;
+    }
+
+    let denominator = sold_tokens + remaining_source_tokens;
+    if denominator <= Decimal::ZERO {
+        return None;
+    }
+
+    Some(
+        (copied_tokens * (sold_tokens / denominator))
+            .round_dp(8)
+            .max(Decimal::ZERO)
+            .min(copied_tokens),
+    )
+}
 
 pub struct RiskEngine {
     config: Arc<AppConfig>,
@@ -84,6 +121,58 @@ impl RiskEngine {
         }
     }
 
+    fn copied_lot_side_key(side: polybot_common::types::Side) -> &'static str {
+        match side {
+            polybot_common::types::Side::Yes => "YES",
+            polybot_common::types::Side::No => "NO",
+        }
+    }
+
+    async fn fetch_source_remaining_tokens(&self, signal: &Signal) -> Option<Decimal> {
+        let client = polymarket_client_sdk::data::Client::new(&self.config.scanner.data_api_url)
+            .ok()?;
+        let wallet: polymarket_client_sdk::types::Address = signal.wallet_address.parse().ok()?;
+        let side = Self::copied_lot_side_key(signal.side);
+        let mut offset = 0;
+
+        loop {
+            let request = polymarket_client_sdk::data::types::request::PositionsRequest::builder()
+                .user(wallet)
+                .limit(500)
+                .ok()?
+                .offset(offset)
+                .ok()?
+                .build();
+
+            let positions = match client.positions(&request).await {
+                Ok(positions) => positions,
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        wallet = %signal.wallet_address,
+                        market_id = %signal.market_id,
+                        "Failed to fetch source remaining position for mirrored exit"
+                    );
+                    return None;
+                }
+            };
+            let batch_size = positions.len();
+
+            if let Some(position) = positions.into_iter().find(|position| {
+                position.condition_id.to_string().eq_ignore_ascii_case(&signal.market_id)
+                    && position.outcome.eq_ignore_ascii_case(side)
+            }) {
+                return Some(position.size);
+            }
+
+            if batch_size < 500 {
+                return None;
+            }
+
+            offset += batch_size as i32;
+        }
+    }
+
     pub async fn evaluate(&self, signal: &Signal) -> RiskDecision {
         let risk_config = self.runtime_risk.read().await.clone();
         let current_balance = self.balance_manager.current_balance();
@@ -92,11 +181,13 @@ impl RiskEngine {
         if *self.emergency_stop.lock().await {
             return RiskDecision {
                 signal_id: signal.signal_id.clone(),
+                source_wallet: signal.wallet_address.clone(),
                 market_id: signal.market_id.clone(),
                 side: signal.side,
-                direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
+                direction: signal.direction,
                 category: signal.category,
                 position_size_usd: Decimal::ZERO,
+                target_size_tokens: None,
                 confidence_multiplier: Decimal::ZERO,
                 secret_level_multiplier: Decimal::ZERO,
                 drawdown_factor: Decimal::ZERO,
@@ -116,11 +207,13 @@ impl RiskEngine {
             }
             return RiskDecision {
                 signal_id: signal.signal_id.clone(),
+                source_wallet: signal.wallet_address.clone(),
                 market_id: signal.market_id.clone(),
                 side: signal.side,
-                direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
+                direction: signal.direction,
                 category: signal.category,
                 position_size_usd: Decimal::ZERO,
+                target_size_tokens: None,
                 confidence_multiplier: Decimal::ZERO,
                 secret_level_multiplier: Decimal::ZERO,
                 drawdown_factor: Decimal::ZERO,
@@ -134,11 +227,13 @@ impl RiskEngine {
             if Instant::now() < cooldown_until {
                 return RiskDecision {
                     signal_id: signal.signal_id.clone(),
+                    source_wallet: signal.wallet_address.clone(),
                     market_id: signal.market_id.clone(),
                     side: signal.side,
-                    direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
+                    direction: signal.direction,
                     category: signal.category,
                     position_size_usd: Decimal::ZERO,
+                    target_size_tokens: None,
                     confidence_multiplier: Decimal::ZERO,
                     secret_level_multiplier: Decimal::ZERO,
                     drawdown_factor: Decimal::ZERO,
@@ -153,11 +248,13 @@ impl RiskEngine {
         if !followed_wallets.is_empty() && !followed_wallets.contains(&signal.wallet_address.to_lowercase()) {
             return RiskDecision {
                 signal_id: signal.signal_id.clone(),
+                source_wallet: signal.wallet_address.clone(),
                 market_id: signal.market_id.clone(),
                 side: signal.side,
-                direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
+                direction: signal.direction,
                 category: signal.category,
                 position_size_usd: Decimal::ZERO,
+                target_size_tokens: None,
                 confidence_multiplier: Decimal::ZERO,
                 secret_level_multiplier: Decimal::ZERO,
                 drawdown_factor: Decimal::ZERO,
@@ -168,6 +265,119 @@ impl RiskEngine {
         }
         drop(followed_wallets);
 
+        if signal.direction == TradeDirection::Sell {
+            let sqlite_path = std::env::var("POLYBOT_SQLITE_PATH")
+                .unwrap_or_else(|_| "./polybot.db".to_string());
+            let store = match SqliteStore::open(std::path::Path::new(&sqlite_path)) {
+                Ok(store) => store,
+                Err(error) => {
+                    tracing::warn!(error = %error, "Skipping mirrored sell because copied-lot store is unavailable");
+                    return RiskDecision {
+                        signal_id: signal.signal_id.clone(),
+                        source_wallet: signal.wallet_address.clone(),
+                        market_id: signal.market_id.clone(),
+                        side: signal.side,
+                        direction: signal.direction,
+                        category: signal.category,
+                        position_size_usd: Decimal::ZERO,
+                        target_size_tokens: None,
+                        confidence_multiplier: Decimal::ZERO,
+                        secret_level_multiplier: Decimal::ZERO,
+                        drawdown_factor: Decimal::ZERO,
+                        blocked: true,
+                        manual_review: false,
+                        decision: Decision::Skip("copied lot store unavailable".to_string()),
+                    };
+                }
+            };
+            let side = Self::copied_lot_side_key(signal.side);
+            let lot = match store.get_copied_lot(&signal.wallet_address, &signal.market_id, side) {
+                Ok(Some(lot)) => lot,
+                Ok(None) => {
+                    return RiskDecision {
+                        signal_id: signal.signal_id.clone(),
+                        source_wallet: signal.wallet_address.clone(),
+                        market_id: signal.market_id.clone(),
+                        side: signal.side,
+                        direction: signal.direction,
+                        category: signal.category,
+                        position_size_usd: Decimal::ZERO,
+                        target_size_tokens: None,
+                        confidence_multiplier: Decimal::ZERO,
+                        secret_level_multiplier: Decimal::ZERO,
+                        drawdown_factor: Decimal::ZERO,
+                        blocked: true,
+                        manual_review: false,
+                        decision: Decision::Skip("no matching copied lot for mirrored sell".to_string()),
+                    };
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "Skipping mirrored sell because copied-lot lookup failed");
+                    return RiskDecision {
+                        signal_id: signal.signal_id.clone(),
+                        source_wallet: signal.wallet_address.clone(),
+                        market_id: signal.market_id.clone(),
+                        side: signal.side,
+                        direction: signal.direction,
+                        category: signal.category,
+                        position_size_usd: Decimal::ZERO,
+                        target_size_tokens: None,
+                        confidence_multiplier: Decimal::ZERO,
+                        secret_level_multiplier: Decimal::ZERO,
+                        drawdown_factor: Decimal::ZERO,
+                        blocked: true,
+                        manual_review: false,
+                        decision: Decision::Skip("copied lot lookup failed".to_string()),
+                    };
+                }
+            };
+
+            let sold_tokens = sold_tokens_from_signal(signal);
+            let exit_tokens = mirrored_exit_tokens(
+                lot.current_size,
+                sold_tokens,
+                self.fetch_source_remaining_tokens(signal).await,
+            )
+            .unwrap_or(Decimal::ZERO);
+
+            if exit_tokens == Decimal::ZERO {
+                return RiskDecision {
+                    signal_id: signal.signal_id.clone(),
+                    source_wallet: signal.wallet_address.clone(),
+                    market_id: signal.market_id.clone(),
+                    side: signal.side,
+                    direction: signal.direction,
+                    category: signal.category,
+                    position_size_usd: Decimal::ZERO,
+                    target_size_tokens: None,
+                    confidence_multiplier: Decimal::ZERO,
+                    secret_level_multiplier: Decimal::ZERO,
+                    drawdown_factor: Decimal::ZERO,
+                    blocked: true,
+                    manual_review: false,
+                    decision: Decision::Skip("remaining source position unavailable for mirrored sell".to_string()),
+                };
+            }
+
+            let exit_price = signal.target_price.unwrap_or(lot.average_price);
+            return RiskDecision {
+                signal_id: signal.signal_id.clone(),
+                source_wallet: signal.wallet_address.clone(),
+                market_id: signal.market_id.clone(),
+                side: signal.side,
+                direction: signal.direction,
+                category: signal.category,
+                position_size_usd: (exit_tokens * exit_price).round_dp(2),
+                target_size_tokens: Some(exit_tokens),
+                confidence_multiplier: Decimal::ONE,
+                secret_level_multiplier: Decimal::ONE,
+                drawdown_factor: Decimal::ONE,
+                blocked: false,
+                manual_review: false,
+                decision: Decision::Execute,
+            };
+        }
+
         // v3.0: Anti-duplication rule — one owner per token_id.
         if let Some(token_id) = signal.token_id.as_ref() {
             let sqlite_path = std::env::var("POLYBOT_SQLITE_PATH").unwrap_or_else(|_| "./polybot.db".to_string());
@@ -176,11 +386,13 @@ impl RiskEngine {
                     if existing_owner.to_lowercase() != signal.wallet_address.to_lowercase() {
                         return RiskDecision {
                             signal_id: signal.signal_id.clone(),
+                            source_wallet: signal.wallet_address.clone(),
                             market_id: signal.market_id.clone(),
                             side: signal.side,
-                            direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
+                            direction: signal.direction,
                             category: signal.category,
                             position_size_usd: Decimal::ZERO,
+                            target_size_tokens: None,
                             confidence_multiplier: Decimal::ZERO,
                             secret_level_multiplier: Decimal::ZERO,
                             drawdown_factor: Decimal::ZERO,
@@ -209,11 +421,13 @@ impl RiskEngine {
             }
             return RiskDecision {
                 signal_id: signal.signal_id.clone(),
+                source_wallet: signal.wallet_address.clone(),
                 market_id: signal.market_id.clone(),
                 side: signal.side,
-                direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
+                direction: signal.direction,
                 category: signal.category,
                 position_size_usd: Decimal::ZERO,
+                target_size_tokens: None,
                 confidence_multiplier: confidence_multiplier(signal.confidence),
                 secret_level_multiplier: secret_level_multiplier(signal.secret_level),
                 drawdown_factor: Decimal::ZERO,
@@ -235,11 +449,13 @@ impl RiskEngine {
             );
             return RiskDecision {
                 signal_id: signal.signal_id.clone(),
+                source_wallet: signal.wallet_address.clone(),
                 market_id: signal.market_id.clone(),
                 side: signal.side,
-                direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
+                direction: signal.direction,
                 category: signal.category,
                 position_size_usd: Decimal::ZERO,
+                target_size_tokens: None,
                 confidence_multiplier: confidence_multiplier(signal.confidence),
                 secret_level_multiplier: secret_level_multiplier(signal.secret_level),
                 drawdown_factor: Decimal::ZERO,
@@ -280,11 +496,13 @@ impl RiskEngine {
             }
             return RiskDecision {
                 signal_id: signal.signal_id.clone(),
+                source_wallet: signal.wallet_address.clone(),
                 market_id: signal.market_id.clone(),
                 side: signal.side,
-                direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
+                direction: signal.direction,
                 category: signal.category,
                 position_size_usd: Decimal::ZERO,
+                target_size_tokens: None,
                 confidence_multiplier: conf_mult,
                 secret_level_multiplier: sl_mult,
                 drawdown_factor: dd_factor,
@@ -326,11 +544,13 @@ impl RiskEngine {
             }
             return RiskDecision {
                 signal_id: signal.signal_id.clone(),
+                source_wallet: signal.wallet_address.clone(),
                 market_id: signal.market_id.clone(),
                 side: signal.side,
-                direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
+                direction: signal.direction,
                 category: signal.category,
                 position_size_usd: Decimal::ZERO,
+                target_size_tokens: None,
                 confidence_multiplier: conf_mult,
                 secret_level_multiplier: sl_mult,
                 drawdown_factor: dd_factor,
@@ -361,11 +581,13 @@ impl RiskEngine {
             }
             return RiskDecision {
                 signal_id: signal.signal_id.clone(),
+                source_wallet: signal.wallet_address.clone(),
                 market_id: signal.market_id.clone(),
                 side: signal.side,
-                direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
+                direction: signal.direction,
                 category: signal.category,
                 position_size_usd: Decimal::ZERO,
+                target_size_tokens: None,
                 confidence_multiplier: conf_mult,
                 secret_level_multiplier: sl_mult,
                 drawdown_factor: dd_factor,
@@ -377,11 +599,13 @@ impl RiskEngine {
 
         RiskDecision {
             signal_id: signal.signal_id.clone(),
+            source_wallet: signal.wallet_address.clone(),
             market_id: signal.market_id.clone(),
             side: signal.side,
-            direction: OrderDirection::Buy, // TODO(sell-signals): route SELL when scanner emits them.
+            direction: signal.direction,
             category: signal.category,
             position_size_usd: size,
+            target_size_tokens: None,
             confidence_multiplier: conf_mult,
             secret_level_multiplier: sl_mult,
             drawdown_factor: dd_factor,
@@ -628,29 +852,36 @@ pub async fn run_risk_engine(
 mod tests {
     use super::*;
     use crate::state::positions::PositionManager;
-    use polybot_common::types::{Category, Side};
+    use crate::state::sqlite::SqliteStore;
+    use polybot_common::types::{Category, Side, TradeDirection};
     use rust_decimal_macros::dec;
 
-    fn test_signal() -> Signal {
+    fn test_signal_with_direction(direction: TradeDirection) -> Signal {
         Signal {
             signal_id: "signal-1".to_string(),
             timestamp: chrono::Utc::now().to_rfc3339(),
             wallet_address: "0xabc123abc123abc123abc123abc123abc123abc1".to_string(),
             market_id: "market-1".to_string(),
             side: Side::Yes,
+            direction,
             confidence: 6,
             secret_level: 6,
             category: Category::Politics,
             source: polybot_common::types::SignalSource::Manual,
             tx_hash: None,
             token_id: None,
-            target_price: None,
+            target_price: Some(dec!(0.50)),
             target_size_usdc: None,
+            target_size_tokens: Some(dec!(5)),
             resolved: false,
             redeemable: false,
             suggested_size_usdc: Some(dec!(50)),
             scanner_version: "1.0.0".to_string(),
         }
+    }
+
+    fn test_signal() -> Signal {
+        test_signal_with_direction(TradeDirection::Buy)
     }
 
     fn engine_with_config(mut config: AppConfig) -> RiskEngine {
@@ -672,6 +903,72 @@ mod tests {
         let decision = engine.evaluate(&test_signal()).await;
         assert!(matches!(decision.decision, Decision::Execute));
         assert_eq!(decision.position_size_usd, dec!(100));
+    }
+
+    #[tokio::test]
+    async fn sell_signal_without_matching_copied_lot_is_skipped() {
+        let sqlite_path = std::env::temp_dir().join(format!(
+            "polybot-risk-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let _store = SqliteStore::open(&sqlite_path).unwrap();
+        std::env::set_var("POLYBOT_SQLITE_PATH", &sqlite_path);
+
+        let engine = engine_with_config(AppConfig::default());
+        let signal = test_signal_with_direction(TradeDirection::Sell);
+
+        let decision = engine.evaluate(&signal).await;
+
+        assert!(matches!(decision.decision, Decision::Skip(_)));
+
+        let _ = std::fs::remove_file(sqlite_path);
+        std::env::remove_var("POLYBOT_SQLITE_PATH");
+    }
+
+    #[test]
+    fn mirrored_sell_fraction_uses_remaining_source_position() {
+        let exit_tokens = mirrored_exit_tokens(dec!(10), dec!(2), Some(dec!(8))).unwrap();
+
+        assert_eq!(exit_tokens, dec!(2));
+    }
+
+    #[tokio::test]
+    async fn sell_signal_skips_when_remaining_position_lookup_is_unavailable() {
+        let sqlite_path = std::env::temp_dir().join(format!(
+            "polybot-risk-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let store = SqliteStore::open(&sqlite_path).unwrap();
+        std::env::set_var("POLYBOT_SQLITE_PATH", &sqlite_path);
+
+        let opened_at = chrono::Utc::now();
+        store
+            .upsert_copied_lot(&crate::state::sqlite::CopiedLotRow {
+                id: "lot-1".to_string(),
+                source_wallet: "0xabc123abc123abc123abc123abc123abc123abc1".to_string(),
+                market_id: "market-1".to_string(),
+                side: "YES".to_string(),
+                current_size: dec!(4),
+                average_price: dec!(0.5),
+                opened_at: opened_at.to_rfc3339(),
+                updated_at: opened_at.to_rfc3339(),
+                last_signal_id: Some("signal-0".to_string()),
+                last_tx_hash: None,
+            })
+            .unwrap();
+
+        let mut config = AppConfig::default();
+        config.scanner.data_api_url = "http://127.0.0.1:9".to_string();
+        let engine = engine_with_config(config);
+        let mut signal = test_signal_with_direction(TradeDirection::Sell);
+        signal.target_size_tokens = Some(dec!(8));
+
+        let decision = engine.evaluate(&signal).await;
+
+        assert!(matches!(decision.decision, Decision::Skip(_)));
+
+        let _ = std::fs::remove_file(sqlite_path);
+        std::env::remove_var("POLYBOT_SQLITE_PATH");
     }
 
     #[tokio::test]

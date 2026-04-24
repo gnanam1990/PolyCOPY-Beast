@@ -83,26 +83,26 @@ pub enum Side {
     No,
 }
 
-/// Order direction on the CLOB — distinct from [`Side`] (outcome token).
+/// Trade direction on the CLOB — distinct from [`Side`] (outcome token).
 /// `Side::{Yes, No}` selects which outcome token the order is against;
-/// `OrderDirection::{Buy, Sell}` is the direction of the trade on that token.
+/// `TradeDirection::{Buy, Sell}` is the direction of the trade on that token.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OrderDirection {
+#[serde(rename_all = "UPPERCASE")]
+pub enum TradeDirection {
     #[default]
     Buy,
     Sell,
 }
 
-impl OrderDirection {
+impl TradeDirection {
     pub fn is_sell(&self) -> bool {
-        matches!(self, OrderDirection::Sell)
+        matches!(self, TradeDirection::Sell)
     }
 
     pub fn as_str(&self) -> &'static str {
         match self {
-            OrderDirection::Buy => "buy",
-            OrderDirection::Sell => "sell",
+            TradeDirection::Buy => "buy",
+            TradeDirection::Sell => "sell",
         }
     }
 }
@@ -166,6 +166,10 @@ fn default_signal_source() -> SignalSource {
     SignalSource::Manual
 }
 
+fn default_trade_direction() -> TradeDirection {
+    TradeDirection::Buy
+}
+
 /// Signal schema (v2.5 base with Module 1 extensions for core fields).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Signal {
@@ -174,6 +178,8 @@ pub struct Signal {
     pub wallet_address: String,
     pub market_id: String,
     pub side: Side,
+    #[serde(default = "default_trade_direction")]
+    pub direction: TradeDirection,
     pub confidence: u8,
     pub secret_level: u8,
     pub category: Category,
@@ -187,6 +193,8 @@ pub struct Signal {
     pub target_price: Option<Decimal>,
     #[serde(default)]
     pub target_size_usdc: Option<Decimal>,
+    #[serde(default)]
+    pub target_size_tokens: Option<Decimal>,
     #[serde(default)]
     pub resolved: bool,
     #[serde(default)]
@@ -344,15 +352,14 @@ pub enum Decision {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskDecision {
     pub signal_id: String,
+    pub source_wallet: String,
     pub market_id: String,
     pub side: Side,
-    /// CLOB order direction. Defaults to [`OrderDirection::Buy`] at every
-    /// construction site today; routed from the scanner once SELL signals
-    /// are emitted.
-    #[serde(default)]
-    pub direction: OrderDirection,
+    pub direction: TradeDirection,
     pub category: Category,
     pub position_size_usd: Decimal,
+    #[serde(default)]
+    pub target_size_tokens: Option<Decimal>,
     pub confidence_multiplier: Decimal,
     pub secret_level_multiplier: Decimal,
     pub drawdown_factor: Decimal,
@@ -400,12 +407,11 @@ impl PositionKey {
 pub struct Trade {
     pub id: String,
     pub signal_id: String,
+    pub source_wallet: String,
     pub market_id: String,
     pub category: Category,
     pub side: Side,
-    /// CLOB order direction this trade resulted from.
-    #[serde(default)]
-    pub direction: OrderDirection,
+    pub direction: TradeDirection,
     pub price: Decimal,
     pub size: Decimal,
     pub size_usd: Decimal,
@@ -462,6 +468,23 @@ mod tests {
     }
 
     #[test]
+    fn trade_direction_serialization_round_trip() {
+        let buy = serde_json::to_string(&TradeDirection::Buy).unwrap();
+        let sell = serde_json::to_string(&TradeDirection::Sell).unwrap();
+
+        assert_eq!(buy, "\"BUY\"");
+        assert_eq!(sell, "\"SELL\"");
+        assert_eq!(
+            serde_json::from_str::<TradeDirection>(&buy).unwrap(),
+            TradeDirection::Buy
+        );
+        assert_eq!(
+            serde_json::from_str::<TradeDirection>(&sell).unwrap(),
+            TradeDirection::Sell
+        );
+    }
+
+    #[test]
     fn fok_requires_price_buffer() {
         assert!(OrderType::Fok.requires_price_buffer());
         assert!(!OrderType::Limit.requires_price_buffer());
@@ -474,6 +497,7 @@ mod tests {
             wallet_address: "0xabc123abc123abc123abc123abc123abc123abc1".to_string(),
             market_id: "0xdef456".to_string(),
             side: Side::Yes,
+            direction: TradeDirection::Buy,
             confidence: 7,
             secret_level: 7,
             category: Category::Politics,
@@ -482,6 +506,7 @@ mod tests {
             token_id: None,
             target_price: None,
             target_size_usdc: None,
+            target_size_tokens: None,
             resolved: false,
             redeemable: false,
             suggested_size_usdc: Some(dec!(50)),
@@ -615,10 +640,11 @@ mod tests {
         let trade = Trade {
             id: "t1".to_string(),
             signal_id: "s1".to_string(),
+            source_wallet: "0xabc123abc123abc123abc123abc123abc123abc1".to_string(),
             market_id: "m1".to_string(),
             category: Category::Politics,
             side: Side::Yes,
-            direction: OrderDirection::Buy,
+            direction: TradeDirection::Buy,
             price: dec!(0.65),
             size: dec!(100),
             size_usd: dec!(65),
@@ -630,5 +656,22 @@ mod tests {
             simulated: false,
         };
         assert!(!trade.simulated);
+    }
+
+    #[test]
+    fn signal_deserialization_defaults_direction_to_buy_for_legacy_payloads() {
+        let json = r#"{
+            "signal_id": "550e8400-e29b-41d4-a716-446655440000",
+            "timestamp": "2026-04-14T12:34:56.789Z",
+            "wallet_address": "0xabc123abc123abc123abc123abc123abc123abc1",
+            "market_id": "market-1",
+            "side": "YES",
+            "confidence": 7,
+            "secret_level": 6,
+            "category": "politics"
+        }"#;
+
+        let signal: Signal = serde_json::from_str(json).unwrap();
+        assert_eq!(signal.direction, TradeDirection::Buy);
     }
 }
