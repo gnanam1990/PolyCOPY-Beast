@@ -257,25 +257,34 @@ impl SqliteStore {
                 description = migration.description,
                 "Applying schema migration"
             );
-            self.conn
-                .execute_batch(migration.sql)
-                .map_err(|e| {
-                    PolybotError::State(format!(
-                        "Migration v{} ({}) failed: {}",
-                        migration.version, migration.description, e
-                    ))
-                })?;
-            self.conn
-                .execute(
-                    "INSERT INTO schema_migrations (version) VALUES (?1)",
-                    [migration.version],
-                )
-                .map_err(|e| {
-                    PolybotError::State(format!(
-                        "Failed to record schema_migrations v{}: {}",
-                        migration.version, e
-                    ))
-                })?;
+            let tx = self.conn.unchecked_transaction().map_err(|e| {
+                PolybotError::State(format!(
+                    "Failed to begin migration v{} ({}) transaction: {}",
+                    migration.version, migration.description, e
+                ))
+            })?;
+            tx.execute_batch(migration.sql).map_err(|e| {
+                PolybotError::State(format!(
+                    "Migration v{} ({}) failed: {}",
+                    migration.version, migration.description, e
+                ))
+            })?;
+            tx.execute(
+                "INSERT INTO schema_migrations (version) VALUES (?1)",
+                [migration.version],
+            )
+            .map_err(|e| {
+                PolybotError::State(format!(
+                    "Failed to record schema_migrations v{}: {}",
+                    migration.version, e
+                ))
+            })?;
+            tx.commit().map_err(|e| {
+                PolybotError::State(format!(
+                    "Failed to commit migration v{} ({}): {}",
+                    migration.version, migration.description, e
+                ))
+            })?;
         }
         Ok(())
     }
@@ -1084,6 +1093,15 @@ mod migration_runner_tests {
     #[test]
     fn migrations_are_idempotent() {
         let store = SqliteStore::open_in_memory().unwrap();
+        let initial: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
+            .unwrap();
         store.run_migrations_for_test().expect("re-run should be no-op");
+        let after: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(initial, after, "idempotent re-run should not add rows");
     }
 }
