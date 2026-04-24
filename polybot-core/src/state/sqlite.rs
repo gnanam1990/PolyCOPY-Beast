@@ -815,6 +815,162 @@ impl SqliteStore {
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| PolybotError::State(format!("Failed to read signals: {}", e)))
     }
+
+    pub fn insert_transaction(
+        &self,
+        rec: &polybot_common::types::TransactionRecord,
+    ) -> Result<(), PolybotError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO transactions
+                (transaction_id, trade_id, type, state, submitted_at, confirmed_at, transaction_hash, error_msg)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                rec.transaction_id,
+                rec.trade_id,
+                rec.kind.as_sqlite_str(),
+                rec.state.as_sqlite_str(),
+                rec.submitted_at.to_rfc3339(),
+                rec.confirmed_at.map(|t| t.to_rfc3339()),
+                rec.transaction_hash,
+                rec.error_msg,
+            ],
+        )
+        .map_err(|e| PolybotError::State(format!("Failed to insert transaction: {}", e)))?;
+        Ok(())
+    }
+
+    pub fn update_transaction_state(
+        &self,
+        transaction_id: &str,
+        state: polybot_common::types::TransactionState,
+        transaction_hash: Option<&str>,
+        error_msg: Option<&str>,
+    ) -> Result<(), PolybotError> {
+        let confirmed_at = if state.is_terminal() {
+            Some(chrono::Utc::now().to_rfc3339())
+        } else {
+            None
+        };
+        self.conn.execute(
+            "UPDATE transactions
+             SET state = ?2,
+                 confirmed_at = COALESCE(?3, confirmed_at),
+                 transaction_hash = COALESCE(?4, transaction_hash),
+                 error_msg = COALESCE(?5, error_msg)
+             WHERE transaction_id = ?1",
+            rusqlite::params![
+                transaction_id,
+                state.as_sqlite_str(),
+                confirmed_at,
+                transaction_hash,
+                error_msg,
+            ],
+        )
+        .map_err(|e| PolybotError::State(format!("Failed to update transaction state: {}", e)))?;
+        Ok(())
+    }
+
+    pub fn get_transaction(
+        &self,
+        transaction_id: &str,
+    ) -> Result<Option<polybot_common::types::TransactionRecord>, PolybotError> {
+        use rusqlite::OptionalExtension as _;
+        self.conn
+            .query_row(
+                "SELECT transaction_id, trade_id, type, state, submitted_at, confirmed_at, transaction_hash, error_msg
+                 FROM transactions WHERE transaction_id = ?1",
+                [transaction_id],
+                Self::row_to_transaction_record,
+            )
+            .optional()
+            .map_err(|e| PolybotError::State(format!("Failed to query transaction: {}", e)))
+    }
+
+    pub fn list_non_terminal_transactions(
+        &self,
+    ) -> Result<Vec<polybot_common::types::TransactionRecord>, PolybotError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT transaction_id, trade_id, type, state, submitted_at, confirmed_at, transaction_hash, error_msg
+                 FROM transactions
+                 WHERE state NOT IN ('STATE_SUCCESS', 'STATE_FAILED')
+                 ORDER BY submitted_at ASC",
+            )
+            .map_err(|e| PolybotError::State(format!("Failed to prepare list-tx query: {}", e)))?;
+        let rows = stmt
+            .query_map([], Self::row_to_transaction_record)
+            .map_err(|e| PolybotError::State(format!("Failed to execute list-tx query: {}", e)))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| PolybotError::State(format!("Failed to collect tx rows: {}", e)))
+    }
+
+    fn row_to_transaction_record(
+        row: &rusqlite::Row<'_>,
+    ) -> rusqlite::Result<polybot_common::types::TransactionRecord> {
+        use polybot_common::types::{TransactionKind, TransactionRecord, TransactionState};
+        let kind_str: String = row.get(2)?;
+        let state_str: String = row.get(3)?;
+        let kind = match kind_str.as_str() {
+            "order" => TransactionKind::Order,
+            "cancel" => TransactionKind::Cancel,
+            "wrap" => TransactionKind::Wrap,
+            "approve" => TransactionKind::Approve,
+            "redeem" => TransactionKind::Redeem,
+            "deploy" => TransactionKind::Deploy,
+            other => {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    2,
+                    rusqlite::types::Type::Text,
+                    format!("unknown transaction kind: {}", other).into(),
+                ));
+            }
+        };
+        let state = match state_str.as_str() {
+            "STATE_NEW" => TransactionState::New,
+            "STATE_PENDING" => TransactionState::Pending,
+            "STATE_SUBMITTED" => TransactionState::Submitted,
+            "STATE_SUCCESS" => TransactionState::Success,
+            "STATE_FAILED" => TransactionState::Failed,
+            other => {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    3,
+                    rusqlite::types::Type::Text,
+                    format!("unknown transaction state: {}", other).into(),
+                ));
+            }
+        };
+        let submitted_at_str: String = row.get(4)?;
+        let submitted_at = chrono::DateTime::parse_from_rfc3339(&submitted_at_str)
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+                4,
+                rusqlite::types::Type::Text,
+                Box::new(e),
+            ))?
+            .with_timezone(&chrono::Utc);
+        let confirmed_at_str: Option<String> = row.get(5)?;
+        let confirmed_at = confirmed_at_str
+            .map(|s| {
+                chrono::DateTime::parse_from_rfc3339(&s)
+                    .map(|d| d.with_timezone(&chrono::Utc))
+            })
+            .transpose()
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+                5,
+                rusqlite::types::Type::Text,
+                Box::new(e),
+            ))?;
+        Ok(TransactionRecord {
+            transaction_id: row.get(0)?,
+            trade_id: row.get(1)?,
+            kind,
+            state,
+            submitted_at,
+            confirmed_at,
+            transaction_hash: row.get(6)?,
+            error_msg: row.get(7)?,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1242,5 +1398,76 @@ mod migration_runner_tests {
                 cols
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod transactions_crud_tests {
+    use super::SqliteStore;
+    use polybot_common::types::{TransactionKind, TransactionRecord, TransactionState};
+    use chrono::Utc;
+
+    fn sample_record() -> TransactionRecord {
+        TransactionRecord {
+            transaction_id: "txn_abc123".into(),
+            trade_id: None,
+            kind: TransactionKind::Order,
+            state: TransactionState::New,
+            submitted_at: Utc::now(),
+            confirmed_at: None,
+            transaction_hash: None,
+            error_msg: None,
+        }
+    }
+
+    #[test]
+    fn insert_and_get_transaction_roundtrip() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let rec = sample_record();
+        store.insert_transaction(&rec).unwrap();
+        let got = store
+            .get_transaction(&rec.transaction_id)
+            .unwrap()
+            .expect("transaction should exist");
+        assert_eq!(got.transaction_id, rec.transaction_id);
+        assert_eq!(got.kind, TransactionKind::Order);
+        assert_eq!(got.state, TransactionState::New);
+    }
+
+    #[test]
+    fn update_transaction_state_promotes_to_terminal() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let rec = sample_record();
+        store.insert_transaction(&rec).unwrap();
+        store
+            .update_transaction_state(
+                &rec.transaction_id,
+                TransactionState::Success,
+                Some("0xdeadbeef"),
+                None,
+            )
+            .unwrap();
+        let got = store
+            .get_transaction(&rec.transaction_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.state, TransactionState::Success);
+        assert_eq!(got.transaction_hash.as_deref(), Some("0xdeadbeef"));
+        assert!(got.confirmed_at.is_some());
+    }
+
+    #[test]
+    fn list_non_terminal_transactions_filters_by_state() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut a = sample_record();
+        a.transaction_id = "txn_a".into();
+        let mut b = sample_record();
+        b.transaction_id = "txn_b".into();
+        b.state = TransactionState::Success;
+        store.insert_transaction(&a).unwrap();
+        store.insert_transaction(&b).unwrap();
+        let pending = store.list_non_terminal_transactions().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].transaction_id, "txn_a");
     }
 }
