@@ -1471,3 +1471,77 @@ mod transactions_crud_tests {
         assert_eq!(pending[0].transaction_id, "txn_a");
     }
 }
+
+#[cfg(test)]
+mod migration_roundtrip_tests {
+    use super::SqliteStore;
+    use std::path::PathBuf;
+
+    fn tmp_db_path() -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("polybot-phase1-{}.db", uuid::Uuid::new_v4()));
+        p
+    }
+
+    #[test]
+    fn fresh_db_applies_all_migrations_then_reopen_is_noop() {
+        let path = tmp_db_path();
+        let _ = std::fs::remove_file(&path);
+
+        // First open: apply every migration.
+        {
+            let store = SqliteStore::open(&path).expect("open fresh db");
+            store
+                .conn
+                .execute_batch(
+                    "INSERT INTO transactions
+                        (transaction_id, trade_id, type, state, submitted_at)
+                     VALUES ('tx1', NULL, 'wrap', 'STATE_NEW', '2026-04-24T00:00:00Z');
+                     INSERT INTO signals
+                        (id, source, received_at, target_wallet, market_id,
+                         token_id, side, outcome, target_price, target_size,
+                         confidence, secret_level, category)
+                     VALUES ('s1','polling','2026-04-24T00:00:00Z','0xabc','m1',
+                             'tok1','YES','YES','0.5','10',7,6,'politics');",
+                )
+                .expect("v2 tables/columns usable");
+        }
+
+        // Second open: migrations already recorded, previously-written row
+        // still present, v3 default for taker_fee_bps applied.
+        {
+            let store = SqliteStore::open(&path).expect("reopen");
+            let n: i64 = store
+                .conn
+                .query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 1, "transactions row lost on reopen");
+
+            let taker_fee_bps: i64 = store
+                .conn
+                .query_row(
+                    "SELECT taker_fee_bps FROM signals WHERE id = 's1'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(taker_fee_bps, 0, "migration v3 default should be 0");
+
+            let max_version: i64 = store
+                .conn
+                .query_row(
+                    "SELECT COALESCE(MAX(version), -1) FROM schema_migrations",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(
+                max_version >= 5,
+                "expected all v1-v5 migrations, got {}",
+                max_version
+            );
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+}
