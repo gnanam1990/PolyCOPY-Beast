@@ -41,4 +41,13 @@ pub const MIGRATIONS: &[Migration] = &[
                 ON transactions(trade_id);
         "#,
     },
+    Migration {
+        version: 3,
+        description: "V2: add feeSchedule columns to signals",
+        sql: r#"
+            ALTER TABLE signals ADD COLUMN taker_fee_bps INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE signals ADD COLUMN maker_fee_bps INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE signals ADD COLUMN rebate_bps    INTEGER NOT NULL DEFAULT 0;
+        "#,
+    },
 ];

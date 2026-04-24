@@ -1149,4 +1149,23 @@ mod migration_runner_tests {
             );
         }
     }
+
+    #[test]
+    fn signals_table_has_v2_fee_columns() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut stmt = store.conn.prepare("PRAGMA table_info(signals)").unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for required in ["taker_fee_bps", "maker_fee_bps", "rebate_bps"] {
+            assert!(
+                cols.iter().any(|c| c == required),
+                "signals missing V2 column: {} (have {:?})",
+                required,
+                cols
+            );
+        }
+    }
 }
