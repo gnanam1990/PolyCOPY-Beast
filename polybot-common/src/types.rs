@@ -427,6 +427,41 @@ pub enum TradeStatus {
     Failed(String),
 }
 
+/// Match-time fee schedule for a CLOB V2 market.
+///
+/// Units per PRD §18: all fields are basis points × 100.
+/// i.e. `taker_fee_bps = 12500` means 125 bps, which is 1.25%.
+///
+/// Name collision note: the *struct field* uses `_bps` suffix for Rust
+/// ergonomics, but the JSON shape uses `takerFee` / `makerFee` / `rebate`
+/// as specified in the PRD.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeeSchedule {
+    #[serde(rename = "takerFee")]
+    pub taker_fee_bps: u32,
+    #[serde(rename = "makerFee")]
+    pub maker_fee_bps: u32,
+    #[serde(rename = "rebate")]
+    pub rebate_bps: u32,
+}
+
+impl FeeSchedule {
+    /// Taker fee in true basis points (PRD units / 100).
+    pub fn taker_bps(&self) -> u32 {
+        self.taker_fee_bps / 100
+    }
+
+    /// Maker fee in true basis points.
+    pub fn maker_bps(&self) -> u32 {
+        self.maker_fee_bps / 100
+    }
+
+    /// Maker rebate in true basis points.
+    pub fn rebate_bps(&self) -> u32 {
+        self.rebate_bps / 100
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -630,5 +665,31 @@ mod tests {
             simulated: false,
         };
         assert!(!trade.simulated);
+    }
+
+    #[test]
+    fn fee_schedule_deserializes_from_prd_shape() {
+        let json = r#"{"takerFee":12500,"makerFee":0,"rebate":2500}"#;
+        let fs: FeeSchedule = serde_json::from_str(json).unwrap();
+        assert_eq!(fs.taker_fee_bps, 12500);
+        assert_eq!(fs.maker_fee_bps, 0);
+        assert_eq!(fs.rebate_bps, 2500);
+    }
+
+    #[test]
+    fn fee_schedule_converts_bps_hundredths_to_bps() {
+        let fs = FeeSchedule { taker_fee_bps: 12500, maker_fee_bps: 0, rebate_bps: 2500 };
+        assert_eq!(fs.taker_bps(), 125);
+        assert_eq!(fs.maker_bps(), 0);
+        assert_eq!(fs.rebate_bps(), 25);
+    }
+
+    #[test]
+    fn fee_schedule_serializes_with_camel_case_keys() {
+        let fs = FeeSchedule { taker_fee_bps: 500, maker_fee_bps: 0, rebate_bps: 100 };
+        let s = serde_json::to_string(&fs).unwrap();
+        assert!(s.contains("\"takerFee\":500"), "got: {}", s);
+        assert!(s.contains("\"makerFee\":0"), "got: {}", s);
+        assert!(s.contains("\"rebate\":100"), "got: {}", s);
     }
 }
