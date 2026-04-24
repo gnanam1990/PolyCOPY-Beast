@@ -154,6 +154,8 @@ The dashboard is a **WebAssembly single-page app** built with Leptos, featuring 
 - **Auto-refresh**: Every 5 seconds
 - **Responsive**: Collapses to stacked layout on mobile
 - **Color-coded tags**: Green=Buy/Yes/Open, Red=Sell/No, Blue=Politics, Orange=Crypto
+- **Mirrored exits**: Tracked wallet sells reduce only that wallet's copied lot by the same sold fraction
+- **Partial exit fills**: The bot keeps the partial fill and does not retry the remainder automatically
 
 ---
 

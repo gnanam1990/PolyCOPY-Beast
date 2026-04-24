@@ -7,10 +7,12 @@ use super::clob_client::MarketContext;
 #[derive(Debug, Clone)]
 pub struct Order {
     pub signal_id: String,
+    pub source_wallet: String,
     pub market_id: String,
     pub token_id: String,
     pub category: Category,
     pub side: Side,
+    pub direction: TradeDirection,
     pub price: Decimal,
     pub size: Decimal,
     pub size_usd: Decimal,
@@ -25,24 +27,32 @@ pub fn build_order(
 ) -> Order {
     let order_type = select_order_type(decision);
     let price = align_to_tick_size(target_price, market_context.tick_size);
-    let normalized_size_usd = size_usd.round_dp(2);
-    let raw_size = if price > Decimal::ZERO {
-        (normalized_size_usd / price).round_dp(2)
+    let (size, normalized_size_usd) = if let Some(target_size_tokens) = decision.target_size_tokens {
+        let size = target_size_tokens.round_dp(2).max(Decimal::ZERO);
+        (size, (size * price).round_dp(2))
     } else {
-        Decimal::ZERO
-    };
-    let size = if raw_size > Decimal::ZERO && raw_size < market_context.min_order_size {
-        market_context.min_order_size
-    } else {
-        raw_size
+        let normalized_size_usd = size_usd.round_dp(2);
+        let raw_size = if price > Decimal::ZERO {
+            (normalized_size_usd / price).round_dp(2)
+        } else {
+            Decimal::ZERO
+        };
+        let size = if raw_size > Decimal::ZERO && raw_size < market_context.min_order_size {
+            market_context.min_order_size
+        } else {
+            raw_size
+        };
+        (size, normalized_size_usd)
     };
 
     Order {
         signal_id: decision.signal_id.clone(),
+        source_wallet: decision.source_wallet.clone(),
         market_id: decision.market_id.clone(),
         token_id: market_context.token_id.clone(),
         category: decision.category,
         side: decision.side,
+        direction: decision.direction,
         price,
         size,
         size_usd: normalized_size_usd,
@@ -105,9 +115,11 @@ pub fn create_simulated_trade(decision: &RiskDecision, order: &Order) -> Trade {
     Trade {
         id: uuid::Uuid::new_v4().to_string(),
         signal_id: decision.signal_id.clone(),
+        source_wallet: order.source_wallet.clone(),
         market_id: order.market_id.clone(),
         category: decision.category,
         side: order.side,
+        direction: order.direction,
         price: order.price,
         size: order.size,
         size_usd: order.size_usd,
@@ -129,10 +141,13 @@ mod tests {
     fn test_decision(conf_mult: Decimal, sl_mult: Decimal) -> RiskDecision {
         RiskDecision {
             signal_id: "test-id".to_string(),
+            source_wallet: "0xabc123abc123abc123abc123abc123abc123abc1".to_string(),
             market_id: "market-1".to_string(),
             side: Side::No,
+            direction: TradeDirection::Buy,
             category: Category::Crypto,
             position_size_usd: dec!(50),
+            target_size_tokens: None,
             confidence_multiplier: conf_mult,
             secret_level_multiplier: sl_mult,
             drawdown_factor: dec!(1.0),
@@ -176,6 +191,43 @@ mod tests {
     }
 
     #[test]
+    fn simulated_trade_preserves_direction_and_source_wallet() {
+        let decision = RiskDecision {
+            signal_id: "sig-1".to_string(),
+            source_wallet: "0xabc123abc123abc123abc123abc123abc123abc1".to_string(),
+            market_id: "market-1".to_string(),
+            side: Side::Yes,
+            direction: TradeDirection::Sell,
+            category: Category::Politics,
+            position_size_usd: dec!(25),
+            target_size_tokens: Some(dec!(50)),
+            confidence_multiplier: dec!(1),
+            secret_level_multiplier: dec!(1),
+            drawdown_factor: dec!(1),
+            blocked: false,
+            manual_review: false,
+            decision: Decision::Execute,
+        };
+
+        let order = build_order(&decision, &test_market_context(), dec!(0.50), dec!(25));
+        let trade = create_simulated_trade(&decision, &order);
+
+        assert_eq!(trade.direction, TradeDirection::Sell);
+        assert_eq!(trade.source_wallet, decision.source_wallet);
+    }
+
+    #[test]
+    fn simulated_trade_uses_order_source_wallet() {
+        let decision = test_decision(dec!(1.0), dec!(1.0));
+        let mut order = build_order(&decision, &test_market_context(), dec!(0.50), dec!(50));
+        order.source_wallet = "0xdef456def456def456def456def456def456def4".to_string();
+
+        let trade = create_simulated_trade(&decision, &order);
+
+        assert_eq!(trade.source_wallet, order.source_wallet);
+    }
+
+    #[test]
     fn build_order_preserves_signal_context() {
         let decision = test_decision(dec!(1.0), dec!(1.0));
         let order = build_order(&decision, &test_market_context(), dec!(0.25), dec!(50));
@@ -183,9 +235,36 @@ mod tests {
         assert_eq!(order.market_id, "market-1");
         assert_eq!(order.token_id, "token-1");
         assert_eq!(order.side, Side::No);
+        assert_eq!(order.direction, TradeDirection::Buy);
+        assert_eq!(
+            order.source_wallet,
+            "0xabc123abc123abc123abc123abc123abc123abc1"
+        );
         assert_eq!(order.price, dec!(0.25));
         assert_eq!(order.size_usd, dec!(50));
         assert_eq!(order.size, dec!(200));
+    }
+
+    #[test]
+    fn sell_target_token_size_survives_price_drift() {
+        let mut decision = test_decision(dec!(1.0), dec!(1.0));
+        decision.direction = TradeDirection::Sell;
+        decision.side = Side::Yes;
+        decision.position_size_usd = dec!(2.00);
+        decision.target_size_tokens = Some(dec!(4));
+
+        let order = build_order_with_price_buffer(
+            &decision,
+            &test_market_context(),
+            dec!(0.60),
+            dec!(2.00),
+            dec!(0.10),
+            OrderType::Fok,
+        );
+
+        assert_eq!(order.price, dec!(0.66));
+        assert_eq!(order.size, dec!(4));
+        assert_eq!(order.size_usd, dec!(2.64));
     }
 
     #[test]
