@@ -186,16 +186,12 @@ pub struct ApiCredentials {
 }
 
 impl ApiCredentials {
-    fn into_sdk_credentials(&self) -> Result<SdkCredentials, PolybotError> {
+    fn into_sdk_credentials(self) -> Result<SdkCredentials, PolybotError> {
         let key = Uuid::parse_str(&self.api_key).map_err(|e| {
             PolybotError::Config(format!("Invalid persisted CLOB api key: {}", e))
         })?;
 
-        Ok(SdkCredentials::new(
-            key,
-            self.secret.clone(),
-            self.passphrase.clone(),
-        ))
+        Ok(SdkCredentials::new(key, self.secret, self.passphrase))
     }
 }
 
@@ -866,10 +862,8 @@ impl ClobClient {
         market_id: &str,
         side: Side,
     ) -> Result<String, PolybotError> {
-        if !Self::looks_like_condition_id(market_id) {
-            if U256::from_str(market_id).is_ok() {
-                return Ok(market_id.to_string());
-            }
+        if !Self::looks_like_condition_id(market_id) && U256::from_str(market_id).is_ok() {
+            return Ok(market_id.to_string());
         }
 
         let market = self.get_market(market_id).await?;

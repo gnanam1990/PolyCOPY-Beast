@@ -1,8 +1,8 @@
 use polybot_common::constants::drawdown_multiplier;
 use rust_decimal::Decimal;
 
-/// v2.5: Drawdown module now delegates to the stepped curve in constants.
-/// Kept as a module for organizational consistency.
+// v2.5: Drawdown module now delegates to the stepped curve in constants.
+// Kept as a module for organizational consistency.
 
 /// Calculate drawdown factor using v2.5 stepped curve.
 /// Delegates to `polybot_common::constants::drawdown_multiplier`.

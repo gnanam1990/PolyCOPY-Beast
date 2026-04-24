@@ -58,7 +58,7 @@ impl FileWatcher {
                 for path in &event.paths {
                     if let Some(ext) = path.extension() {
                         if ext == "json" {
-                            if let Err(e) = self.process_file(&path).await {
+                            if let Err(e) = self.process_file(path).await {
                                 tracing::error!("Error processing file {:?}: {}", path, e);
                             }
                         }

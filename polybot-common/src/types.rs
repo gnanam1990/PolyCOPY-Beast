@@ -83,11 +83,28 @@ pub enum Side {
     No,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Trade direction on the CLOB — distinct from [`Side`] (outcome token).
+/// `Side::{Yes, No}` selects which outcome token the order is against;
+/// `TradeDirection::{Buy, Sell}` is the direction of the trade on that token.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum TradeDirection {
+    #[default]
     Buy,
     Sell,
+}
+
+impl TradeDirection {
+    pub fn is_sell(&self) -> bool {
+        matches!(self, TradeDirection::Sell)
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TradeDirection::Buy => "buy",
+            TradeDirection::Sell => "sell",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

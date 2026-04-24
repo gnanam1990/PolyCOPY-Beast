@@ -87,6 +87,7 @@ impl PositionManager {
 
         tracing::info!(
             market_id = %position.market_id,
+            direction = trade.direction.as_str(),
             size = %position.current_size,
             avg_price = %position.average_price,
             "Position updated"
@@ -199,6 +200,24 @@ mod tests {
     use rust_decimal_macros::dec;
 
     fn test_trade(
+        market_id: &str,
+        price: Decimal,
+        filled_size: Decimal,
+        side: Side,
+        category: Category,
+        direction: TradeDirection,
+    ) -> Trade {
+        test_trade_with_direction(
+            market_id,
+            price,
+            filled_size,
+            side,
+            category,
+            direction,
+        )
+    }
+
+    fn test_trade_with_direction(
         market_id: &str,
         price: Decimal,
         filled_size: Decimal,
@@ -389,6 +408,147 @@ mod tests {
             .is_some());
         assert!(pm.get_position(&PositionKey::new("m1", Side::No)).is_some());
         assert_eq!(pm.open_position_count(), 2);
+    }
+
+    #[test]
+    fn sell_fill_reduces_position_size() {
+        let mut pm = PositionManager::new();
+        pm.update_from_trade(&test_trade(
+            "m1",
+            dec!(0.50),
+            dec!(100),
+            Side::Yes,
+            Category::Politics,
+            TradeDirection::Buy,
+        ))
+        .unwrap();
+
+        pm.update_from_trade(&test_trade_with_direction(
+            "m1",
+            dec!(0.60),
+            dec!(30),
+            Side::Yes,
+            Category::Politics,
+            TradeDirection::Sell,
+        ))
+        .unwrap();
+
+        let pos = pm
+            .get_position(&PositionKey::new("m1", Side::Yes))
+            .unwrap();
+        assert_eq!(pos.current_size, dec!(70));
+        // Average price preserved — SELLs don't re-cost remaining shares.
+        assert_eq!(pos.average_price, dec!(0.50));
+    }
+
+    #[test]
+    fn sell_fill_fully_closes_position() {
+        let mut pm = PositionManager::new();
+        pm.update_from_trade(&test_trade(
+            "m1",
+            dec!(0.50),
+            dec!(100),
+            Side::Yes,
+            Category::Politics,
+            TradeDirection::Buy,
+        ))
+        .unwrap();
+
+        pm.update_from_trade(&test_trade_with_direction(
+            "m1",
+            dec!(0.60),
+            dec!(100),
+            Side::Yes,
+            Category::Politics,
+            TradeDirection::Sell,
+        ))
+        .unwrap();
+
+        assert!(pm
+            .get_position(&PositionKey::new("m1", Side::Yes))
+            .is_none());
+        assert_eq!(pm.open_position_count(), 0);
+    }
+
+    #[test]
+    fn sell_fill_exceeding_position_returns_error() {
+        let mut pm = PositionManager::new();
+        pm.update_from_trade(&test_trade(
+            "m1",
+            dec!(0.50),
+            dec!(100),
+            Side::Yes,
+            Category::Politics,
+            TradeDirection::Buy,
+        ))
+        .unwrap();
+
+        let err = pm
+            .update_from_trade(&test_trade_with_direction(
+                "m1",
+                dec!(0.60),
+                dec!(200),
+                Side::Yes,
+                Category::Politics,
+                TradeDirection::Sell,
+            ))
+            .unwrap_err();
+
+        match err {
+            PolybotError::State(message) => assert!(message.contains("oversized sell")),
+            other => panic!("expected state error, got {other:?}"),
+        }
+
+        let position = pm.get_position(&PositionKey::new("m1", Side::Yes)).unwrap();
+        assert_eq!(position.current_size, dec!(100));
+    }
+
+    #[test]
+    fn sell_fill_without_position_ignored() {
+        let mut pm = PositionManager::new();
+        pm.update_from_trade(&test_trade_with_direction(
+            "m1",
+            dec!(0.60),
+            dec!(50),
+            Side::Yes,
+            Category::Politics,
+            TradeDirection::Sell,
+        ))
+        .unwrap();
+
+        assert!(pm
+            .get_position(&PositionKey::new("m1", Side::Yes))
+            .is_none());
+        assert_eq!(pm.open_position_count(), 0);
+    }
+
+    #[test]
+    fn repeated_buy_fills_still_compute_average_price() {
+        let mut pm = PositionManager::new();
+        pm.update_from_trade(&test_trade(
+            "m1",
+            dec!(0.40),
+            dec!(50),
+            Side::Yes,
+            Category::Politics,
+            TradeDirection::Buy,
+        ))
+        .unwrap();
+        pm.update_from_trade(&test_trade(
+            "m1",
+            dec!(0.60),
+            dec!(50),
+            Side::Yes,
+            Category::Politics,
+            TradeDirection::Buy,
+        ))
+        .unwrap();
+
+        let pos = pm
+            .get_position(&PositionKey::new("m1", Side::Yes))
+            .unwrap();
+        assert_eq!(pos.current_size, dec!(100));
+        assert_eq!(pos.average_price, dec!(0.50));
     }
 
     #[test]

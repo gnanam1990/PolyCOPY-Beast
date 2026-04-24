@@ -7,7 +7,7 @@ use polybot_common::constants::{
     confidence_multiplier, drawdown_multiplier as calc_drawdown, secret_level_multiplier,
 };
 use rust_decimal::prelude::ToPrimitive;
-use polybot_common::types::{Decision, RiskDecision, Signal};
+use polybot_common::types::{Decision, RiskDecision, Signal, TradeDirection};
 use rust_decimal::Decimal;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -265,7 +265,7 @@ impl RiskEngine {
         }
         drop(followed_wallets);
 
-        if signal.direction == polybot_common::types::TradeDirection::Sell {
+        if signal.direction == TradeDirection::Sell {
             let sqlite_path = std::env::var("POLYBOT_SQLITE_PATH")
                 .unwrap_or_else(|_| "./polybot.db".to_string());
             let store = match SqliteStore::open(std::path::Path::new(&sqlite_path)) {
@@ -386,16 +386,16 @@ impl RiskEngine {
                     if existing_owner.to_lowercase() != signal.wallet_address.to_lowercase() {
                         return RiskDecision {
                             signal_id: signal.signal_id.clone(),
-                source_wallet: signal.wallet_address.clone(),
-                market_id: signal.market_id.clone(),
-                side: signal.side,
-                direction: signal.direction,
-                category: signal.category,
-                position_size_usd: Decimal::ZERO,
-                target_size_tokens: None,
-                confidence_multiplier: Decimal::ZERO,
-                secret_level_multiplier: Decimal::ZERO,
-                drawdown_factor: Decimal::ZERO,
+                            source_wallet: signal.wallet_address.clone(),
+                            market_id: signal.market_id.clone(),
+                            side: signal.side,
+                            direction: signal.direction,
+                            category: signal.category,
+                            position_size_usd: Decimal::ZERO,
+                            target_size_tokens: None,
+                            confidence_multiplier: Decimal::ZERO,
+                            secret_level_multiplier: Decimal::ZERO,
+                            drawdown_factor: Decimal::ZERO,
                             blocked: true,
                             manual_review: false,
                             decision: Decision::Skip(format!(

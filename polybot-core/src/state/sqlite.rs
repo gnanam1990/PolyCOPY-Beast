@@ -326,6 +326,7 @@ impl SqliteStore {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)] // TODO: refactor into an arg struct
     pub fn insert_signal_log(
         &self,
         signal_id: &str,

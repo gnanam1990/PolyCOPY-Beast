@@ -60,11 +60,11 @@ pub async fn run_dedup_task(
     loop {
         tokio::select! {
             Some(event) = receiver.recv() => {
-                if filter.check_and_record(&event) {
-                    if sender.send(event).await.is_err() {
-                        tracing::error!("Downstream channel closed");
-                        return Err(PolybotError::ChannelClosed);
-                    }
+                if filter.check_and_record(&event)
+                    && sender.send(event).await.is_err()
+                {
+                    tracing::error!("Downstream channel closed");
+                    return Err(PolybotError::ChannelClosed);
                 }
             }
             _ = cleanup_interval.tick() => {
