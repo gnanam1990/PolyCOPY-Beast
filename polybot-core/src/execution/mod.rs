@@ -3,7 +3,6 @@ pub mod clob_ws;
 pub mod order_builder;
 pub mod rate_limiter;
 pub mod retry;
-pub mod rpc_pool;
 pub mod transport;
 
 use polybot_common::constants::MIN_POSITION_USDC;
@@ -51,7 +50,6 @@ pub async fn run_execution_engine(
         "Execution transport selected"
     );
 
-    let _rpc_pool = rpc_pool::RpcPool::new(&config.execution.rpc_endpoints);
     let retry_policy = retry::RetryPolicy::default();
     let market_data_client = transport_plan
         .uses_market_data
