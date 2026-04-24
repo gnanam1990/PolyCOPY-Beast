@@ -298,15 +298,21 @@ impl SqliteStore {
         self.run_migrations()
     }
 
-    // TODO(phase2): extend column list to include V2 fields
-    // (transaction_id, transaction_hash, relayer_state, taker_fee_bps,
-    // fee_paid_usdc, rebate_usdc, retry_count, error_msg). INSERT OR REPLACE
-    // currently wipes those columns back to SQL defaults on every write; any
-    // V2 writer must not land until this is updated.
     pub fn insert_trade(&self, trade: &Trade) -> Result<(), PolybotError> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO trades (id, signal_id, market_id, category, side, price, size, size_usd, filled_size, order_type, status, placed_at, filled_at, simulated)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            "INSERT OR REPLACE INTO trades (
+                id, signal_id, market_id, category, side, price, size,
+                size_usd, filled_size, order_type, status, placed_at,
+                filled_at, simulated,
+                transaction_id, transaction_hash, relayer_state,
+                taker_fee_bps, fee_paid_usdc, rebate_usdc, retry_count, error_msg
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7,
+                ?8, ?9, ?10, ?11, ?12,
+                ?13, ?14,
+                ?15, ?16, ?17,
+                ?18, ?19, ?20, ?21, ?22
+            )",
             rusqlite::params![
                 trade.id,
                 trade.signal_id,
@@ -322,6 +328,14 @@ impl SqliteStore {
                 trade.placed_at.to_rfc3339(),
                 trade.filled_at.map(|t| t.to_rfc3339()),
                 trade.simulated as i32,
+                trade.transaction_id,
+                trade.transaction_hash,
+                trade.relayer_state.map(|s| s.as_sqlite_str().to_string()),
+                trade.taker_fee_bps as i64,
+                trade.fee_paid_usdc.to_string(),
+                trade.rebate_usdc.to_string(),
+                trade.retry_count as i64,
+                trade.error_msg,
             ],
         ).map_err(|e| PolybotError::State(format!("Failed to insert trade: {}", e)))?;
         Ok(())
@@ -1576,5 +1590,75 @@ mod migration_roundtrip_tests {
         }
 
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod insert_trade_v2_tests {
+    use super::SqliteStore;
+    use polybot_common::types::{
+        Category, OrderDirection, OrderType, Side, Trade, TradeStatus, TransactionState,
+    };
+    use rust_decimal_macros::dec;
+
+    fn v2_trade() -> Trade {
+        Trade {
+            id: "t-v2".into(),
+            signal_id: "s-v2".into(),
+            market_id: "m-v2".into(),
+            category: Category::Politics,
+            side: Side::Yes,
+            direction: OrderDirection::Buy,
+            price: dec!(0.50),
+            size: dec!(100),
+            size_usd: dec!(50),
+            filled_size: dec!(100),
+            order_type: OrderType::Fok,
+            status: TradeStatus::Filled,
+            placed_at: chrono::Utc::now(),
+            filled_at: Some(chrono::Utc::now()),
+            simulated: false,
+            transaction_id: Some("txn_zzz".into()),
+            transaction_hash: Some("0xabc".into()),
+            relayer_state: Some(TransactionState::Success),
+            taker_fee_bps: 125,
+            fee_paid_usdc: dec!(0.25),
+            rebate_usdc: dec!(0.05),
+            retry_count: 2,
+            error_msg: None,
+        }
+    }
+
+    #[test]
+    fn insert_trade_persists_v2_relayer_columns() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store.insert_trade(&v2_trade()).unwrap();
+
+        let (txn_id, txn_hash, relayer_state, taker_fee_bps, fee_paid, rebate, retry_count): (
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            i64,
+            String,
+            String,
+            i64,
+        ) = store
+            .conn
+            .query_row(
+                "SELECT transaction_id, transaction_hash, relayer_state,
+                        taker_fee_bps, fee_paid_usdc, rebate_usdc, retry_count
+                 FROM trades WHERE id = 't-v2'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+            )
+            .unwrap();
+
+        assert_eq!(txn_id.as_deref(), Some("txn_zzz"));
+        assert_eq!(txn_hash.as_deref(), Some("0xabc"));
+        assert_eq!(relayer_state.as_deref(), Some("STATE_SUCCESS"));
+        assert_eq!(taker_fee_bps, 125);
+        assert_eq!(fee_paid, "0.25");
+        assert_eq!(rebate, "0.05");
+        assert_eq!(retry_count, 2);
     }
 }
