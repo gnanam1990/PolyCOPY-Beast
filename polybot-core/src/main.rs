@@ -109,6 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.clone(),
         metrics.clone(),
         position_manager.clone(),
+        config.reconciliation.auto_heal,
     ).with_alerts(Some(alert_broadcaster.clone())));
     let market_prices = Arc::new(RwLock::new(HashMap::new()));
     let wallet_activity_state = Arc::new(RwLock::new(scanner::wallet_tracker::WalletActivityState::default()));
