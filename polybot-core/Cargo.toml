@@ -27,3 +27,4 @@ reqwest = { version = "0.12", features = ["json"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util", "macros"] }
+serial_test = "3"

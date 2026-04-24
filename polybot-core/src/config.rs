@@ -561,6 +561,7 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn default_config_is_valid() {
@@ -600,6 +601,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn apply_env_overrides_simulation() {
         std::env::set_var("POLYBOT_SIMULATION", "true");
         let mut config = AppConfig::default();
@@ -610,6 +612,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn apply_env_telegram_user_ids() {
         std::env::set_var("POLYBOT_TELEGRAM_ALLOWED_USER_IDS", "123,456,789");
         let mut config = AppConfig::default();
@@ -619,6 +622,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn apply_env_target_wallets() {
         std::env::set_var("POLYBOT_TARGET_WALLETS", "0xabc, 0xDEF ");
         let mut config = AppConfig::default();
@@ -663,6 +667,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn relayer_config_parses_from_env() {
         std::env::set_var("RELAYER_URL", "https://relayer-v2.polymarket.com");
         std::env::set_var("RELAYER_API_KEY", "test-api-key");
@@ -679,6 +684,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn relayer_config_partial_is_rejected() {
         std::env::set_var("RELAYER_URL", "https://relayer-v2.polymarket.com");
         std::env::remove_var("RELAYER_API_KEY");
@@ -702,6 +708,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn collateral_config_applies_env_overrides() {
         std::env::set_var("COLLATERAL_ONRAMP_ADDRESS", "0xabcdef0000000000000000000000000000000000");
         std::env::set_var("USDC_E_ADDRESS", "0x1111111111111111111111111111111111111111");
@@ -720,6 +727,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn builder_config_parses_from_env() {
         let code = "0x00000000000000000000000000000000000000000000000000000000deadbeef";
         std::env::set_var("BUILDER_CODE", code);
@@ -737,6 +745,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn fok_max_fee_bps_reads_from_env() {
         std::env::set_var("FOK_MAX_FEE_BPS", "20");
         let mut config = AppConfig::default();
@@ -755,6 +764,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn category_caps_reads_from_env() {
         std::env::set_var("MAX_POSITION_POLITICS_USDC", "500");
         std::env::set_var("MAX_POSITION_CRYPTO_USDC", "300");
