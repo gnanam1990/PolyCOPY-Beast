@@ -64,4 +64,12 @@ pub const MIGRATIONS: &[Migration] = &[
             ALTER TABLE trades ADD COLUMN error_msg        TEXT;
         "#,
     },
+    Migration {
+        version: 5,
+        description: "V2: add fees_paid + rebates_earned to daily_stats",
+        sql: r#"
+            ALTER TABLE daily_stats ADD COLUMN fees_paid      TEXT NOT NULL DEFAULT '0';
+            ALTER TABLE daily_stats ADD COLUMN rebates_earned TEXT NOT NULL DEFAULT '0';
+        "#,
+    },
 ];

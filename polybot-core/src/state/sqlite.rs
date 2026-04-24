@@ -1196,4 +1196,26 @@ mod migration_runner_tests {
             );
         }
     }
+
+    #[test]
+    fn daily_stats_has_v2_fee_columns() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut stmt = store
+            .conn
+            .prepare("PRAGMA table_info(daily_stats)")
+            .unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for required in ["fees_paid", "rebates_earned"] {
+            assert!(
+                cols.iter().any(|c| c == required),
+                "daily_stats missing V2 column: {} (have {:?})",
+                required,
+                cols
+            );
+        }
+    }
 }
