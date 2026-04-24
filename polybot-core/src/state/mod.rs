@@ -186,7 +186,7 @@ async fn run_in_memory(
 mod tests {
     use super::*;
     use chrono::Utc;
-    use polybot_common::types::{Category, OrderType, Side};
+    use polybot_common::types::{Category, OrderDirection, OrderType, Side};
 
     fn test_trade(market_id: &str, side: Side, category: Category) -> Trade {
         Trade {
@@ -195,6 +195,7 @@ mod tests {
             market_id: market_id.to_string(),
             category,
             side,
+            direction: OrderDirection::Buy,
             price: Decimal::new(50, 2),
             size: Decimal::new(10, 0),
             size_usd: Decimal::new(500, 2),

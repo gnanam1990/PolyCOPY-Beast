@@ -6,7 +6,7 @@ use rust_decimal_macros::dec;
 /// Confidence 1-3 = 0.0 (blocked, manual review queue).
 pub fn confidence_multiplier(confidence: u8) -> Decimal {
     match confidence {
-        1 | 2 | 3 => dec!(0.0),
+        1..=3 => dec!(0.0),
         4 => dec!(0.5),
         5 => dec!(0.75),
         6 => dec!(1.0),
@@ -22,7 +22,7 @@ pub fn confidence_multiplier(confidence: u8) -> Decimal {
 /// Secret level 1-3 = 0.0 (blocked, manual review queue).
 pub fn secret_level_multiplier(secret_level: u8) -> Decimal {
     match secret_level {
-        1 | 2 | 3 => dec!(0.0),
+        1..=3 => dec!(0.0),
         4 => dec!(0.6),
         5 => dec!(0.8),
         6 => dec!(1.0),

@@ -247,6 +247,7 @@ impl SqliteStore {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)] // TODO: refactor into an arg struct
     pub fn insert_signal_log(
         &self,
         signal_id: &str,
@@ -765,6 +766,7 @@ mod tests {
             market_id: "m1".to_string(),
             category: Category::Politics,
             side: Side::Yes,
+            direction: OrderDirection::Buy,
             price: dec!(0.65),
             size: dec!(100),
             size_usd: dec!(65),
@@ -959,6 +961,7 @@ mod tests {
             market_id: "m1".to_string(),
             category: Category::Politics,
             side: Side::Yes,
+            direction: OrderDirection::Buy,
             price: dec!(0.55),
             size: dec!(10),
             size_usd: dec!(5.5),
@@ -975,6 +978,7 @@ mod tests {
             market_id: "m2".to_string(),
             category: Category::Crypto,
             side: Side::No,
+            direction: OrderDirection::Buy,
             price: dec!(0.65),
             size: dec!(10),
             size_usd: dec!(6.5),

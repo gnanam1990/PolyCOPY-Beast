@@ -105,6 +105,7 @@ async fn confirm_mode_switch(
     ))
 }
 
+#[allow(clippy::too_many_arguments)] // TODO: refactor into an arg struct
 pub async fn handle_command(
     bot: Bot,
     msg: teloxide::types::Message,
@@ -129,12 +130,10 @@ pub async fn handle_command(
     }
 
     // v2.5: Rate limit check (except /confirm)
-    if !matches!(cmd, Command::Confirm) {
-        if !rate_limiter.check_command(user_id) {
-            bot.send_message(msg.chat.id, "Rate limited. Max 30 commands per minute.")
-                .await?;
-            return Ok(());
-        }
+    if !matches!(cmd, Command::Confirm) && !rate_limiter.check_command(user_id) {
+        bot.send_message(msg.chat.id, "Rate limited. Max 30 commands per minute.")
+            .await?;
+        return Ok(());
     }
 
     match cmd {

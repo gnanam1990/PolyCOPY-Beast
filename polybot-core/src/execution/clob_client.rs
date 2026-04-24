@@ -186,16 +186,12 @@ pub struct ApiCredentials {
 }
 
 impl ApiCredentials {
-    fn into_sdk_credentials(&self) -> Result<SdkCredentials, PolybotError> {
+    fn into_sdk_credentials(self) -> Result<SdkCredentials, PolybotError> {
         let key = Uuid::parse_str(&self.api_key).map_err(|e| {
             PolybotError::Config(format!("Invalid persisted CLOB api key: {}", e))
         })?;
 
-        Ok(SdkCredentials::new(
-            key,
-            self.secret.clone(),
-            self.passphrase.clone(),
-        ))
+        Ok(SdkCredentials::new(key, self.secret, self.passphrase))
     }
 }
 
@@ -655,7 +651,10 @@ impl ClobClient {
         let signable_order = client
             .limit_order()
             .token_id(token_id)
-            .side(SdkSide::Buy)
+            .side(match order.direction {
+                polybot_common::types::OrderDirection::Buy => SdkSide::Buy,
+                polybot_common::types::OrderDirection::Sell => SdkSide::Sell,
+            })
             .price(order.price)
             .size(order.size)
             .order_type(sdk_order_type)
@@ -714,6 +713,7 @@ impl ClobClient {
             market_id: order.market_id.clone(),
             category: order.category,
             side: order.side,
+            direction: order.direction,
             price: order.price,
             size: order.size,
             size_usd: order.size_usd,
@@ -799,10 +799,8 @@ impl ClobClient {
         market_id: &str,
         side: Side,
     ) -> Result<String, PolybotError> {
-        if !Self::looks_like_condition_id(market_id) {
-            if U256::from_str(market_id).is_ok() {
-                return Ok(market_id.to_string());
-            }
+        if !Self::looks_like_condition_id(market_id) && U256::from_str(market_id).is_ok() {
+            return Ok(market_id.to_string());
         }
 
         let market = self.get_market(market_id).await?;
