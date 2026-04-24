@@ -7,7 +7,18 @@ use polybot_common::constants::{
 use polybot_common::errors::PolybotError;
 use polybot_common::types::{Category, Position, PositionKey, Side};
 use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
 use tokio::sync::Mutex;
+
+/// Tolerance for comparing share sizes across sources.
+/// Data API indexing may round or lag by a fraction of a share;
+/// anything within 0.1 shares is treated as equal.
+const SIZE_TOLERANCE: Decimal = dec!(0.1);
+
+/// Tolerance for comparing prices (probability-equivalent USD).
+/// Polymarket prices move in 1-cent ticks; anything within 0.01 is
+/// treated as equal.
+const PRICE_TOLERANCE: Decimal = dec!(0.01);
 
 use crate::config::AppConfig;
 use crate::execution::clob_client::ClobClient;
@@ -26,6 +37,7 @@ pub struct Reconciler {
     position_manager: Arc<Mutex<PositionManager>>,
     sqlite_path: String,
     alerts: Option<AlertBroadcaster>,
+    auto_heal: bool,
 }
 
 impl Reconciler {
@@ -33,6 +45,7 @@ impl Reconciler {
         config: Arc<AppConfig>,
         metrics: Arc<Metrics>,
         position_manager: Arc<Mutex<PositionManager>>,
+        auto_heal: bool,
     ) -> Self {
         Self {
             config,
@@ -43,6 +56,7 @@ impl Reconciler {
             sqlite_path: std::env::var("POLYBOT_SQLITE_PATH")
                 .unwrap_or_else(|_| "./polybot.db".to_string()),
             alerts: None,
+            auto_heal,
         }
     }
 
@@ -257,6 +271,41 @@ impl Reconciler {
             })
             .collect::<Vec<_>>();
 
+        let ghost_keys: Vec<PositionKey> = persisted_by_key
+            .values()
+            .filter(|snapshot| !reference_keys.contains(&snapshot.key()))
+            .map(|snapshot| snapshot.key())
+            .collect();
+
+        if !self.auto_heal {
+            if !restored_positions.is_empty() || !ghost_keys.is_empty() {
+                tracing::warn!(
+                    restore_count = restored_positions.len(),
+                    ghost_count = ghost_keys.len(),
+                    "Reconciliation would heal state \
+                     (auto_heal=false; set reconciliation.auto_heal=true \
+                     in config to enable). See debug logs for details."
+                );
+                for pos in &restored_positions {
+                    tracing::debug!(
+                        market_id = %pos.market_id,
+                        side = ?pos.side,
+                        size = %pos.current_size,
+                        avg_price = %pos.average_price,
+                        "Would restore position from reference"
+                    );
+                }
+                for key in &ghost_keys {
+                    tracing::debug!(
+                        market_id = %key.market_id,
+                        side = ?key.side,
+                        "Would mark SQLite position as ghost"
+                    );
+                }
+            }
+            return Ok(());
+        }
+
         {
             let mut manager = self.position_manager.lock().await;
             manager.restore_positions(restored_positions.clone());
@@ -291,6 +340,11 @@ impl Reconciler {
                 owner.as_deref(),
             )?;
         }
+
+        tracing::info!(
+            restored = restored_positions.len(),
+            "Reconciliation auto-healed local state"
+        );
 
         Ok(())
     }
@@ -438,8 +492,8 @@ fn diff_snapshots(
         .iter()
         .filter_map(|(key, reference)| {
             let local = local_by_key.get(key)?;
-            if decimals_close(local.current_size, reference.current_size)
-                && decimals_close(local.average_price, reference.average_price)
+            if sizes_close(local.current_size, reference.current_size)
+                && prices_close(local.average_price, reference.average_price)
             {
                 None
             } else {
@@ -467,8 +521,20 @@ fn diff_snapshots(
     }
 }
 
+fn sizes_close(left: Decimal, right: Decimal) -> bool {
+    (left - right).abs() <= SIZE_TOLERANCE
+}
+
+fn prices_close(left: Decimal, right: Decimal) -> bool {
+    (left - right).abs() <= PRICE_TOLERANCE
+}
+
+/// Deprecated alias preserved for any out-of-file callers; routes to
+/// [`sizes_close`]. Prefer the typed helpers above.
+#[deprecated(note = "use sizes_close or prices_close for explicit intent")]
+#[allow(dead_code)]
 fn decimals_close(left: Decimal, right: Decimal) -> bool {
-    (left - right).abs() <= rust_decimal_macros::dec!(0.0001)
+    sizes_close(left, right)
 }
 
 fn format_position_key(key: &PositionKey) -> String {
@@ -546,6 +612,13 @@ mod tests {
     fn test_reconciler(
         position_manager: Arc<Mutex<PositionManager>>,
     ) -> (Reconciler, Arc<Metrics>, std::path::PathBuf, std::sync::MutexGuard<'static, ()>) {
+        test_reconciler_with_auto_heal(position_manager, false)
+    }
+
+    fn test_reconciler_with_auto_heal(
+        position_manager: Arc<Mutex<PositionManager>>,
+        auto_heal: bool,
+    ) -> (Reconciler, Arc<Metrics>, std::path::PathBuf, std::sync::MutexGuard<'static, ()>) {
         let guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let sqlite_path = std::env::temp_dir().join(format!(
             "polybot-reconcile-{}.db",
@@ -558,6 +631,7 @@ mod tests {
             Arc::new(AppConfig::default()),
             metrics.clone(),
             position_manager,
+            auto_heal,
         );
         (reconciler, metrics, sqlite_path, guard)
     }
@@ -565,7 +639,12 @@ mod tests {
     #[test]
     fn reconciler_create() {
         let pm = Arc::new(Mutex::new(PositionManager::new()));
-        let _r = Reconciler::new(Arc::new(AppConfig::default()), Arc::new(Metrics::new()), pm);
+        let _r = Reconciler::new(
+            Arc::new(AppConfig::default()),
+            Arc::new(Metrics::new()),
+            pm,
+            false,
+        );
     }
 
     #[tokio::test]
@@ -636,7 +715,7 @@ mod tests {
             manager.restore_positions(vec![test_position("market-local", Side::Yes, dec!(10))]);
         }
 
-        let (r, metrics, sqlite_path, _guard) = test_reconciler(pm.clone());
+        let (r, metrics, sqlite_path, _guard) = test_reconciler_with_auto_heal(pm.clone(), true);
         let store = crate::state::sqlite::SqliteStore::open(&sqlite_path).unwrap();
         store
             .upsert_position(
@@ -670,7 +749,7 @@ mod tests {
     #[tokio::test]
     async fn remote_full_reconciliation_replaces_local_only_positions() {
         let pm = Arc::new(Mutex::new(PositionManager::new()));
-        let (r, metrics, sqlite_path, _guard) = test_reconciler(pm.clone());
+        let (r, metrics, sqlite_path, _guard) = test_reconciler_with_auto_heal(pm.clone(), true);
 
         let local_positions = vec![PositionSnapshot::from_position(&test_position(
             "market-local",
@@ -731,6 +810,111 @@ mod tests {
             mismatches: vec![],
         };
         assert!(!result.has_issues());
+    }
+
+    #[test]
+    fn size_tolerance_allows_small_drift() {
+        assert!(sizes_close(dec!(100.0), dec!(100.05)));
+        assert!(sizes_close(dec!(100.0), dec!(99.95)));
+    }
+
+    #[test]
+    fn size_tolerance_catches_real_drift() {
+        assert!(!sizes_close(dec!(100.0), dec!(100.5)));
+    }
+
+    #[test]
+    fn price_tolerance_allows_tick_drift() {
+        assert!(prices_close(dec!(0.50), dec!(0.505)));
+    }
+
+    #[test]
+    fn price_tolerance_catches_real_drift() {
+        assert!(!prices_close(dec!(0.50), dec!(0.52)));
+    }
+
+    #[tokio::test]
+    async fn auto_heal_false_does_not_mutate_positions() {
+        let pm = Arc::new(Mutex::new(PositionManager::new()));
+        {
+            let mut manager = pm.lock().await;
+            manager.restore_positions(vec![test_position(
+                "market-local",
+                Side::Yes,
+                dec!(10),
+            )]);
+        }
+
+        let (r, metrics, sqlite_path, _guard) =
+            test_reconciler_with_auto_heal(pm.clone(), false);
+        let store = crate::state::sqlite::SqliteStore::open(&sqlite_path).unwrap();
+        store
+            .upsert_position(
+                &test_position("market-remote", Side::No, dec!(25)),
+                Some(dec!(0.70)),
+                Some(dec!(3)),
+                Some("0xsource"),
+            )
+            .unwrap();
+
+        let result = r.run_full().await.unwrap();
+        assert!(result.has_issues());
+
+        // In-memory state MUST be preserved when auto_heal is off.
+        let manager = pm.lock().await;
+        let local = manager
+            .get_position(&PositionKey::new("market-local", Side::Yes))
+            .expect("local position should survive log-only reconciliation");
+        assert_eq!(local.current_size, dec!(10));
+        assert!(manager
+            .get_position(&PositionKey::new("market-remote", Side::No))
+            .is_none());
+        drop(manager);
+
+        // Metrics untouched — no set_open_positions call in log-only path.
+        assert_eq!(
+            metrics.open_positions.load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+
+        let _ = std::fs::remove_file(sqlite_path);
+    }
+
+    #[tokio::test]
+    async fn auto_heal_true_mutates_positions() {
+        let pm = Arc::new(Mutex::new(PositionManager::new()));
+        {
+            let mut manager = pm.lock().await;
+            manager.restore_positions(vec![test_position(
+                "market-local",
+                Side::Yes,
+                dec!(10),
+            )]);
+        }
+
+        let (r, _metrics, sqlite_path, _guard) =
+            test_reconciler_with_auto_heal(pm.clone(), true);
+        let store = crate::state::sqlite::SqliteStore::open(&sqlite_path).unwrap();
+        store
+            .upsert_position(
+                &test_position("market-remote", Side::No, dec!(25)),
+                Some(dec!(0.70)),
+                Some(dec!(3)),
+                Some("0xsource"),
+            )
+            .unwrap();
+
+        let _ = r.run_full().await.unwrap();
+
+        let manager = pm.lock().await;
+        assert!(manager
+            .get_position(&PositionKey::new("market-local", Side::Yes))
+            .is_none());
+        assert!(manager
+            .get_position(&PositionKey::new("market-remote", Side::No))
+            .is_some());
+
+        let _ = std::fs::remove_file(sqlite_path);
     }
 
     #[test]

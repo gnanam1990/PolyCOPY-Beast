@@ -57,6 +57,8 @@ pub struct AppConfig {
     pub execution: ExecutionConfig,
     pub telegram: TelegramConfig,
     pub dashboard: DashboardConfig,
+    #[serde(default)]
+    pub reconciliation: ReconciliationConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,6 +139,34 @@ pub struct DashboardConfig {
     pub port: u16,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReconciliationConfig {
+    /// When true, full reconciliation cycles may OVERWRITE in-memory
+    /// PositionManager state from the reference snapshot. When false
+    /// (default), drift is detected and alerted but no state mutation
+    /// happens.
+    ///
+    /// Enable only after verifying the log-only output for at least
+    /// 2 weeks under real load, to confirm the reference source
+    /// (data-api) doesn't periodically lag behind in-memory state in
+    /// ways that would wrongly "heal" real positions.
+    #[serde(default = "default_auto_heal")]
+    pub auto_heal: bool,
+}
+
+fn default_auto_heal() -> bool {
+    // CONSERVATIVE DEFAULT — do not mutate state without operator opt-in.
+    false
+}
+
+impl Default for ReconciliationConfig {
+    fn default() -> Self {
+        Self {
+            auto_heal: default_auto_heal(),
+        }
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -192,6 +222,7 @@ impl Default for AppConfig {
                 host: "0.0.0.0".to_string(),
                 port: 8080,
             },
+            reconciliation: ReconciliationConfig::default(),
         }
     }
 }
@@ -414,6 +445,10 @@ impl AppConfig {
                 .split(',')
                 .filter_map(|s| s.trim().parse::<u64>().ok())
                 .collect();
+        }
+        if let Ok(val) = std::env::var("POLYBOT_RECONCILIATION_AUTO_HEAL") {
+            let normalized = val.to_lowercase();
+            self.reconciliation.auto_heal = normalized == "true" || normalized == "1";
         }
 
         self.reconcile_system_mode();
