@@ -448,14 +448,9 @@ pub async fn ws_handler(
 ) -> axum::response::Response {
     ws.on_upgrade(move |mut socket| async move {
         let mut rx = state.event_tx.subscribe();
-        loop {
-            match rx.recv().await {
-                Ok(msg) => {
-                    if socket.send(WsMessage::Text(msg.into())).await.is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
+        while let Ok(msg) = rx.recv().await {
+            if socket.send(WsMessage::Text(msg.into())).await.is_err() {
+                break;
             }
         }
     })
