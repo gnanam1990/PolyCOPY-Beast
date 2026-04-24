@@ -1,5 +1,5 @@
 use polybot_common::errors::PolybotError;
-use polybot_common::types::{Side, Trade};
+use polybot_common::types::{Side, Trade, TradeDirection};
 use polymarket_client_sdk::auth::state::{Authenticated, Unauthenticated};
 use polymarket_client_sdk::auth::{Credentials as SdkCredentials, ExposeSecret, LocalSigner, Normal, Signer as _};
 use polymarket_client_sdk::clob::types::request::{BalanceAllowanceRequest, OrderBookSummaryRequest, UpdateBalanceAllowanceRequest};
@@ -303,6 +303,104 @@ pub struct ClobClient {
     authenticated_client: RwLock<Option<SdkClobClient<Authenticated<Normal>>>>,
     /// Whether we have valid L2 credentials
     authenticated: RwLock<bool>,
+}
+
+fn sdk_side_for_direction(direction: TradeDirection) -> SdkSide {
+    match direction {
+        TradeDirection::Buy => SdkSide::Buy,
+        TradeDirection::Sell => SdkSide::Sell,
+    }
+}
+
+fn response_filled_size(
+    order: &Order,
+    response: &polymarket_client_sdk::clob::types::response::PostOrderResponse,
+) -> Decimal {
+    let filled_size = match order.direction {
+        TradeDirection::Buy => response.taking_amount,
+        TradeDirection::Sell => response.making_amount,
+    };
+
+    filled_size.max(Decimal::ZERO).min(order.size)
+}
+
+fn response_filled_notional_usd(
+    order: &Order,
+    response: &polymarket_client_sdk::clob::types::response::PostOrderResponse,
+) -> Decimal {
+    let filled_notional = match order.direction {
+        TradeDirection::Buy => response.making_amount,
+        TradeDirection::Sell => response.taking_amount,
+    };
+
+    filled_notional.max(Decimal::ZERO).min(order.size_usd)
+}
+
+fn map_trade_status_and_fill(
+    order: &Order,
+    response: &polymarket_client_sdk::clob::types::response::PostOrderResponse,
+) -> (polybot_common::types::TradeStatus, Decimal, Decimal) {
+    if !response.success {
+        return (
+            polybot_common::types::TradeStatus::Failed(
+                response
+                    .error_msg
+                    .clone()
+                    .unwrap_or_else(|| "Order rejected by CLOB".to_string()),
+            ),
+            Decimal::ZERO,
+            order.size_usd,
+        );
+    }
+
+    let response_fill = response_filled_size(order, response);
+    let response_notional = response_filled_notional_usd(order, response);
+    let (status, filled_size, size_usd) = match response.status {
+        polymarket_client_sdk::clob::types::OrderStatusType::Matched => {
+            let filled_size = if response_fill > Decimal::ZERO {
+                response_fill
+            } else {
+                order.size
+            };
+            let size_usd = if response_notional > Decimal::ZERO {
+                response_notional
+            } else {
+                order.size_usd
+            };
+            (polybot_common::types::TradeStatus::Filled, filled_size, size_usd)
+        }
+        polymarket_client_sdk::clob::types::OrderStatusType::Live
+        | polymarket_client_sdk::clob::types::OrderStatusType::Delayed
+            if response_fill > Decimal::ZERO =>
+        {
+            (
+                polybot_common::types::TradeStatus::PartiallyFilled,
+                response_fill,
+                response_notional,
+            )
+        }
+        polymarket_client_sdk::clob::types::OrderStatusType::Live
+        | polymarket_client_sdk::clob::types::OrderStatusType::Delayed => {
+            (polybot_common::types::TradeStatus::Pending, Decimal::ZERO, order.size_usd)
+        }
+        polymarket_client_sdk::clob::types::OrderStatusType::Canceled => {
+            (polybot_common::types::TradeStatus::Cancelled, Decimal::ZERO, order.size_usd)
+        }
+        polymarket_client_sdk::clob::types::OrderStatusType::Unmatched => {
+            (polybot_common::types::TradeStatus::TimedOut, Decimal::ZERO, order.size_usd)
+        }
+        polymarket_client_sdk::clob::types::OrderStatusType::Unknown(ref raw) => (
+            polybot_common::types::TradeStatus::Failed(format!(
+                "Unknown CLOB order status: {}",
+                raw
+            )),
+            Decimal::ZERO,
+            order.size_usd,
+        ),
+        _ => (polybot_common::types::TradeStatus::Pending, Decimal::ZERO, order.size_usd),
+    };
+
+    (status, filled_size, size_usd)
 }
 
 impl ClobClient {
@@ -673,10 +771,7 @@ impl ClobClient {
         let signable_order = client
             .limit_order()
             .token_id(token_id)
-            .side(match order.direction {
-                polybot_common::types::OrderDirection::Buy => SdkSide::Buy,
-                polybot_common::types::OrderDirection::Sell => SdkSide::Sell,
-            })
+            .side(sdk_side_for_direction(order.direction))
             .price(order.price)
             .size(order.size)
             .order_type(sdk_order_type)
@@ -694,51 +789,19 @@ impl ClobClient {
             .await
             .map_err(SubmitOrderError::from_sdk_submit_error)?;
 
-        let status = if !response.success {
-            polybot_common::types::TradeStatus::Failed(
-                response
-                    .error_msg
-                    .clone()
-                    .unwrap_or_else(|| "Order rejected by CLOB".to_string()),
-            )
-        } else {
-            match response.status {
-                polymarket_client_sdk::clob::types::OrderStatusType::Matched => {
-                    polybot_common::types::TradeStatus::Filled
-                }
-                polymarket_client_sdk::clob::types::OrderStatusType::Live
-                | polymarket_client_sdk::clob::types::OrderStatusType::Delayed => {
-                    polybot_common::types::TradeStatus::Pending
-                }
-                polymarket_client_sdk::clob::types::OrderStatusType::Canceled => {
-                    polybot_common::types::TradeStatus::Cancelled
-                }
-                polymarket_client_sdk::clob::types::OrderStatusType::Unmatched => {
-                    polybot_common::types::TradeStatus::TimedOut
-                }
-                polymarket_client_sdk::clob::types::OrderStatusType::Unknown(raw) => {
-                    polybot_common::types::TradeStatus::Failed(format!("Unknown CLOB order status: {}", raw))
-                }
-                _ => polybot_common::types::TradeStatus::Pending,
-            }
-        };
-
-        let filled_size = if matches!(status, polybot_common::types::TradeStatus::Filled) {
-            order.size
-        } else {
-            Decimal::ZERO
-        };
+        let (status, filled_size, size_usd) = map_trade_status_and_fill(order, &response);
 
         Ok(Trade {
             id: response.order_id,
             signal_id: order.signal_id.clone(),
+            source_wallet: order.source_wallet.clone(),
             market_id: order.market_id.clone(),
             category: order.category,
             side: order.side,
             direction: order.direction,
             price: order.price,
             size: order.size,
-            size_usd: order.size_usd,
+            size_usd,
             filled_size,
             order_type: order.order_type,
             status,
@@ -1004,6 +1067,9 @@ impl ClobClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::execution::order_builder::Order;
+    use polybot_common::types::{Category, OrderType};
+    use polybot_common::types::TradeDirection;
     use std::path::PathBuf;
 
     fn test_config() -> ClobConfig {
@@ -1021,6 +1087,22 @@ mod tests {
 
     fn temp_credentials_path() -> PathBuf {
         std::env::temp_dir().join(format!("polybot-clob-credentials-{}.json", Uuid::new_v4()))
+    }
+
+    fn test_order(direction: TradeDirection) -> Order {
+        Order {
+            signal_id: "signal-1".to_string(),
+            source_wallet: "0xabc123abc123abc123abc123abc123abc123abc1".to_string(),
+            market_id: "market-1".to_string(),
+            token_id: "123".to_string(),
+            category: Category::Politics,
+            side: Side::Yes,
+            direction,
+            price: dec!(0.50),
+            size: dec!(10),
+            size_usd: dec!(5),
+            order_type: OrderType::Fok,
+        }
     }
 
     #[test]
@@ -1270,5 +1352,36 @@ mod tests {
         ));
 
         assert!(!error.is_retryable());
+    }
+
+    #[test]
+    fn trade_direction_maps_to_sdk_order_side() {
+        assert_eq!(sdk_side_for_direction(TradeDirection::Buy), SdkSide::Buy);
+        assert_eq!(sdk_side_for_direction(TradeDirection::Sell), SdkSide::Sell);
+    }
+
+    #[test]
+    fn live_response_with_non_zero_fill_surfaces_partial_fill() {
+        let order = test_order(TradeDirection::Sell);
+        let response: polymarket_client_sdk::clob::types::response::PostOrderResponse =
+            serde_json::from_str(
+                r#"{
+                    "errorMsg": null,
+                    "makingAmount": "3",
+                    "takingAmount": "1.5",
+                    "orderID": "order-1",
+                    "status": "LIVE",
+                    "success": true,
+                    "transactionHashes": [],
+                    "tradeIDs": []
+                }"#,
+            )
+            .unwrap();
+
+        let (status, filled_size, size_usd) = map_trade_status_and_fill(&order, &response);
+
+        assert_eq!(status, polybot_common::types::TradeStatus::PartiallyFilled);
+        assert_eq!(filled_size, dec!(3));
+        assert_eq!(size_usd, dec!(1.5));
     }
 }
