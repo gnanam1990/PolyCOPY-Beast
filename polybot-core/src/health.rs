@@ -473,8 +473,11 @@ pub fn create_health_router(state: Arc<HealthState>) -> Router {
         .route("/daily", get(daily_stats_handler))
         .route("/ws", get(ws_handler))
         .route("/control/pause", post(pause_handler))
+        .route("/health/control/pause", post(pause_handler))
         .route("/control/resume", post(resume_handler))
+        .route("/health/control/resume", post(resume_handler))
         .route("/control/emergency-stop", post(emergency_stop_handler))
+        .route("/health/control/emergency-stop", post(emergency_stop_handler))
         .with_state(state)
 }
 
@@ -553,6 +556,9 @@ mod tests {
         assert!(dbg.contains("/control/pause"));
         assert!(dbg.contains("/control/resume"));
         assert!(dbg.contains("/control/emergency-stop"));
+        assert!(dbg.contains("/health/control/pause"));
+        assert!(dbg.contains("/health/control/resume"));
+        assert!(dbg.contains("/health/control/emergency-stop"));
 
         let _ = std::fs::remove_file(sqlite_path);
     }

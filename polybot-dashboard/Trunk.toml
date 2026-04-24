@@ -22,3 +22,23 @@ backend = "http://localhost:8080/positions"
 [[proxy]]
 rewrite = "/signals"
 backend = "http://localhost:8080/signals"
+
+[[proxy]]
+rewrite = "/daily"
+backend = "http://localhost:8080/daily"
+
+[[proxy]]
+rewrite = "/ws"
+backend = "ws://localhost:8080/ws"
+
+[[proxy]]
+rewrite = "/health/control/pause"
+backend = "http://localhost:8080/health/control/pause"
+
+[[proxy]]
+rewrite = "/health/control/resume"
+backend = "http://localhost:8080/health/control/resume"
+
+[[proxy]]
+rewrite = "/health/control/emergency-stop"
+backend = "http://localhost:8080/health/control/emergency-stop"

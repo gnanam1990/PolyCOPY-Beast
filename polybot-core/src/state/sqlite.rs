@@ -303,7 +303,16 @@ impl SqliteStore {
         use rusqlite::OptionalExtension as _;
         self.conn
             .query_row(
-                "SELECT owned_by_wallet FROM positions WHERE owned_by_wallet IS NOT NULL AND market_id = ?1 AND status IN ('Open', 'open') LIMIT 1",
+                "SELECT p.owned_by_wallet
+                 FROM positions p
+                 JOIN signals s
+                   ON s.market_id = p.market_id
+                  AND LOWER(s.side) = LOWER(p.side)
+                  AND s.target_wallet = p.owned_by_wallet
+                 WHERE p.owned_by_wallet IS NOT NULL
+                   AND p.status IN ('Open', 'open')
+                   AND s.token_id = ?1
+                 LIMIT 1",
                 [token_id],
                 |row| row.get(0),
             )
@@ -835,6 +844,49 @@ mod tests {
         assert_eq!(positions[0].current_price, Some(dec!(0.65)));
         assert_eq!(positions[0].unrealized_pnl, Some(dec!(5)));
         assert_eq!(positions[0].owned_by_wallet.as_deref(), Some("0xabc"));
+    }
+
+    #[test]
+    fn get_open_position_owner_by_token_uses_persisted_signal_token_mapping() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let signal = Signal {
+            signal_id: "sig-1".to_string(),
+            timestamp: "2026-04-17T10:00:00Z".to_string(),
+            wallet_address: "0xabc".to_string(),
+            market_id: "market-1".to_string(),
+            side: Side::Yes,
+            confidence: 7,
+            secret_level: 6,
+            category: Category::Politics,
+            source: SignalSource::Polling,
+            tx_hash: Some("0x1234567890123456789012345678901234567890123456789012345678901234".to_string()),
+            token_id: Some("token-1".to_string()),
+            target_price: Some(dec!(0.60)),
+            target_size_usdc: Some(dec!(60)),
+            resolved: false,
+            redeemable: false,
+            suggested_size_usdc: None,
+            scanner_version: "1.0.0".to_string(),
+        };
+        store.insert_signal(&signal, "polling", "YES", "executed").unwrap();
+
+        let position = Position {
+            id: "pos-1".to_string(),
+            market_id: "market-1".to_string(),
+            side: Side::Yes,
+            entry_price: dec!(0.60),
+            current_size: dec!(100),
+            average_price: dec!(0.60),
+            opened_at: chrono::Utc::now(),
+            status: PositionStatus::Open,
+            category: Category::Politics,
+        };
+        store.upsert_position(&position, Some(dec!(0.60)), Some(dec!(0)), Some("0xabc")).unwrap();
+
+        assert_eq!(
+            store.get_open_position_owner_by_token("token-1").unwrap().as_deref(),
+            Some("0xabc")
+        );
     }
 
     #[test]

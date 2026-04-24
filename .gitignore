@@ -7,9 +7,9 @@
 
 # Local environment and runtime data
 /.env
-/*.db
-/*.sqlite
-/*.rdb
+*.db
+*.sqlite
+*.rdb
 /backups/
 /.polybot/
 

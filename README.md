@@ -92,18 +92,19 @@ cp .env.example .env
 ```
 
 #### Required
-- `POLYMARKET_PRIVATE_KEY` — Your EOA private key (with `0x` prefix)
+- `POLYBOT_PRIVATE_KEY` — Your EOA private key (with `0x` prefix)
 - `POLYGON_RPC_URL` — e.g. `https://polygon-rpc.com`
 
 #### Trading Setup
-- `TARGET_WALLETS` — Comma-separated addresses to copy
-- `POSITION_MULTIPLIER` — Copy scale (e.g. `0.1` for 10%)
+- `POLYBOT_TARGET_WALLETS` — Comma-separated addresses to copy
+- `POLYBOT_POSITION_MULTIPLIER` — Copy scale (e.g. `0.1` for 10%)
 
 #### Optional
-- `TELEGRAM_BOT_TOKEN` — From @BotFather
-- `TELEGRAM_ALLOWED_CHAT_IDS` — Your Telegram user ID
+- `POLYBOT_TELEGRAM_TOKEN` — From @BotFather
+- `POLYBOT_TELEGRAM_ALLOWED_USER_IDS` — Your Telegram user ID
+- `POLYBOT_API_KEY` — Enables the optional HTTP signal ingestion endpoint when explicitly set
 
-> ⚠️ **Always start with `SIMULATION_MODE=true`**. Flip to `false` only after validating behavior.
+> ⚠️ **Always start with `POLYBOT_SIMULATION=true`**. Flip to `false` only after validating behavior.
 
 Full `.env` reference is documented in the [PRD](SuperFast_PolyBot_v3_PRD_Enhanced.md).
 
@@ -121,8 +122,9 @@ Expected startup log:
 {"level":"INFO","message":"SuperFast PolyBot v3 starting","simulation":true}
 {"level":"INFO","message":"Running in SIMULATION mode — no real orders will be placed"}
 {"level":"INFO","message":"Health/metrics server starting on 0.0.0.0:8080"}
-{"level":"INFO","message":"HTTP ingestion server starting on 0.0.0.0:8081"}
 ```
+
+If `POLYBOT_API_KEY` is set, the optional HTTP ingestion server starts on `127.0.0.1:8081`.
 
 ### 5. Run the Dashboard
 Open a **new terminal**:

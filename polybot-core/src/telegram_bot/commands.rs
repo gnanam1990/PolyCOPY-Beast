@@ -227,7 +227,7 @@ pub async fn handle_command(
                 confirm_state.register(user_id, ConfirmAction::ResumeAfterLoss);
                 bot.send_message(
                     msg.chat.id,
-                    "Resume after loss breach requires confirmation. Reply /confirm within 30 seconds.",
+                    "Resume after loss breach requires confirmation. Reply /confirm within 60 seconds.",
                 )
                 .await?;
             } else if confirm_state.has_pending(user_id) {
@@ -255,7 +255,7 @@ pub async fn handle_command(
             metrics.record_emergency_stop();
             bot.send_message(
                 msg.chat.id,
-                "Destructive command: EMERGENCY STOP\nThis will close all positions as market orders.\nReply /confirm within 30 seconds to proceed."
+                "Destructive command: EMERGENCY STOP\nThis will close all positions as market orders.\nReply /confirm within 60 seconds to proceed."
             ).await?;
         }
 
@@ -304,7 +304,7 @@ pub async fn handle_command(
                 }
             }
             None => {
-                bot.send_message(msg.chat.id, "No pending confirmation. Send a destructive command first, then /confirm within 30 seconds.").await?;
+                bot.send_message(msg.chat.id, "No pending confirmation. Send a destructive command first, then /confirm within 60 seconds.").await?;
             }
         },
 
@@ -349,7 +349,7 @@ pub async fn handle_command(
                         confirm_state.register(user_id, ConfirmAction::WalletRemove(address.clone()));
                         bot.send_message(
                             msg.chat.id,
-                            format!("Removing wallet {} is destructive. Reply /confirm within 30 seconds.", address),
+                            format!("Removing wallet {} is destructive. Reply /confirm within 60 seconds.", address),
                         )
                         .await?;
                     }
@@ -400,7 +400,7 @@ pub async fn handle_command(
                 bot.send_message(
                     msg.chat.id,
                     format!(
-                        "Mode switch to {:?} requires confirmation. Reply /confirm within 30 seconds.",
+                        "Mode switch to {:?} requires confirmation. Reply /confirm within 60 seconds.",
                         mode
                     ),
                 )

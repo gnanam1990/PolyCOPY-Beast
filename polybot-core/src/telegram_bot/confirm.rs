@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use polybot_common::types::ExecutionMode;
 
 /// v2.5: Two-step confirmation for destructive commands.
-/// After a destructive command, the user must send /confirm within 30 seconds.
+/// After a destructive command, the user must send /confirm within 60 seconds.
 pub struct ConfirmState {
     pending: Mutex<HashMap<u64, PendingConfirm>>,
 }
@@ -23,7 +23,7 @@ pub enum ConfirmAction {
     ModeSwitch(ExecutionMode),
 }
 
-const CONFIRM_TIMEOUT: Duration = Duration::from_secs(30);
+const CONFIRM_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl ConfirmState {
     pub fn new() -> Self {
@@ -110,5 +110,10 @@ mod tests {
         assert!(!state.has_pending(123));
         state.register(123, ConfirmAction::EmergencyStop);
         assert!(state.has_pending(123));
+    }
+
+    #[test]
+    fn confirm_timeout_is_one_minute() {
+        assert_eq!(CONFIRM_TIMEOUT, Duration::from_secs(60));
     }
 }

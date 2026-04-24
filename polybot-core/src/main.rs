@@ -106,6 +106,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let reconciler = Arc::new(state::reconciliation::Reconciler::new(
+        config.clone(),
+        metrics.clone(),
         position_manager.clone(),
     ).with_alerts(Some(alert_broadcaster.clone())));
     let market_prices = Arc::new(RwLock::new(HashMap::new()));
@@ -301,6 +303,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Wait for shutdown signal (Ctrl+C)
     tokio::signal::ctrl_c().await?;
     tracing::info!("Shutdown signal received, stopping...");
+
+    dedup_handle.abort();
+    poller_handle.abort();
+    risk_handle.abort();
+    exec_handle.abort();
+    state_handle.abort();
+    recon_handle.abort();
+    http_handle.abort();
+    health_handle.abort();
+    tg_handle.abort();
+    fw_handle.abort();
+    if let Some(handle) = fast_path_handle.as_ref() {
+        handle.abort();
+    }
+
+    if let Err(e) = execution::cancel_open_orders_on_shutdown(config.clone()).await {
+        tracing::error!(error = %e, "Failed to cancel open orders during shutdown");
+    }
 
     // Wait for all tasks
     let _ = tokio::join!(

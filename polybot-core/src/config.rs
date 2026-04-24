@@ -281,13 +281,13 @@ impl AppConfig {
                 "execution.price_buffer must be >= 0".to_string(),
             ));
         }
-        if self.execution.rpc_endpoints.len() < 2 {
+        if !self.system.simulation && self.execution.rpc_endpoints.len() < 2 {
             tracing::warn!(
                 "v2.5 requires minimum 2 RPC endpoints. Only {} configured.",
                 self.execution.rpc_endpoints.len()
             );
         }
-        if self.execution.rpc_endpoints.is_empty() {
+        if !self.system.simulation && self.execution.rpc_endpoints.is_empty() {
             return Err(PolybotError::Config(
                 "At least one RPC endpoint required".to_string(),
             ));
@@ -441,6 +441,8 @@ mod tests {
     #[test]
     fn empty_rpc_endpoints_rejected() {
         let mut config = AppConfig::default();
+        config.system.simulation = false;
+        config.system.execution_mode = ExecutionMode::Live;
         config.execution.rpc_endpoints = vec![];
         assert!(config.validate().is_err());
     }
@@ -449,6 +451,14 @@ mod tests {
     fn max_concurrent_positions_default() {
         let config = AppConfig::default();
         assert_eq!(config.risk.max_concurrent_positions, 20);
+    }
+
+    #[test]
+    fn simulation_config_allows_empty_rpc_endpoints() {
+        let mut config = AppConfig::default();
+        config.execution.rpc_endpoints.clear();
+
+        assert!(config.validate().is_ok());
     }
 
     #[test]

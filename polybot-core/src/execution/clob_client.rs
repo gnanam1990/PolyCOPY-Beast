@@ -5,8 +5,8 @@ use polymarket_client_sdk::auth::{Credentials as SdkCredentials, ExposeSecret, L
 use polymarket_client_sdk::clob::types::request::{BalanceAllowanceRequest, OrderBookSummaryRequest, UpdateBalanceAllowanceRequest};
 use polymarket_client_sdk::clob::types::{OrderType as SdkOrderType, Side as SdkSide, SignatureType};
 use polymarket_client_sdk::clob::{Client as SdkClobClient, Config as SdkClobConfig};
-use polymarket_client_sdk::types::U256;
-use polymarket_client_sdk::POLYGON;
+use polymarket_client_sdk::types::{Address, U256};
+use polymarket_client_sdk::{POLYGON, derive_proxy_wallet, derive_safe_wallet};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
@@ -544,6 +544,67 @@ impl ClobClient {
             ready_for_live_trading: !approved_spenders.is_empty(),
             approved_spenders,
         })
+    }
+
+    pub fn trading_wallet_address(&self) -> Result<Address, PolybotError> {
+        let signer = self.local_signer()?;
+        let signer_address = signer.address();
+
+        match self.config.signature_type {
+            0 => Ok(signer_address),
+            1 => {
+                if let Some(funder) = self.config.funder_address.as_ref() {
+                    return funder.parse().map_err(|e| {
+                        PolybotError::Config(format!("Invalid proxy funder address: {}", e))
+                    });
+                }
+
+                derive_proxy_wallet(signer_address, self.config.chain_id).ok_or_else(|| {
+                    PolybotError::Config(
+                        "Unable to derive proxy wallet address for reconciliation".to_string(),
+                    )
+                })
+            }
+            2 => {
+                if let Some(funder) = self.config.funder_address.as_ref() {
+                    return funder.parse().map_err(|e| {
+                        PolybotError::Config(format!("Invalid GnosisSafe funder address: {}", e))
+                    });
+                }
+
+                derive_safe_wallet(signer_address, self.config.chain_id).ok_or_else(|| {
+                    PolybotError::Config(
+                        "Unable to derive safe wallet address for reconciliation".to_string(),
+                    )
+                })
+            }
+            other => Err(PolybotError::Config(format!(
+                "Unsupported POLYBOT_SIGNATURE_TYPE {}. Expected 0, 1, or 2.",
+                other
+            ))),
+        }
+    }
+
+    pub async fn cancel_all_orders(&self) -> Result<(), PolybotError> {
+        if !*self.authenticated.read().await {
+            self.authenticate().await?;
+        }
+
+        let client = self
+            .authenticated_client
+            .read()
+            .await
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| {
+                PolybotError::Execution("Authenticated CLOB client unavailable".to_string())
+            })?;
+
+        client
+            .cancel_all_orders()
+            .await
+            .map_err(|e| PolybotError::Execution(format!("Failed to cancel open CLOB orders: {}", e)))?;
+        Ok(())
     }
 
     /// Submit a signed order to the CLOB.

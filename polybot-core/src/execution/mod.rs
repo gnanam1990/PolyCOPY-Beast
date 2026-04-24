@@ -22,6 +22,17 @@ use crate::risk::limits;
 use crate::telegram_bot::alerts::AlertBroadcaster;
 use transport::select_transport_mode;
 
+pub async fn cancel_open_orders_on_shutdown(
+    config: Arc<AppConfig>,
+) -> Result<(), PolybotError> {
+    if !config.system.execution_mode.allows_live_order_submission() {
+        return Ok(());
+    }
+
+    let client = clob_client::ClobClient::from_env()?;
+    client.cancel_all_orders().await
+}
+
 pub async fn run_execution_engine(
     config: Arc<AppConfig>,
     metrics: Arc<Metrics>,
@@ -386,5 +397,13 @@ mod tests {
         assert!(plan.uses_market_data);
         assert!(plan.uses_ws_market_data);
         assert!(!plan.submits_orders);
+    }
+
+    #[tokio::test]
+    async fn shutdown_cancel_skips_non_live_mode() {
+        let config = crate::config::AppConfig::default();
+        assert!(super::cancel_open_orders_on_shutdown(std::sync::Arc::new(config))
+            .await
+            .is_ok());
     }
 }

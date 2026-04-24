@@ -1,29 +1,47 @@
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
 use polybot_common::constants::{
     FULL_RECONCILIATION_INTERVAL_SECS, LIGHT_RECONCILIATION_INTERVAL_SECS,
 };
 use polybot_common::errors::PolybotError;
-use std::sync::Arc;
+use polybot_common::types::{Category, Position, PositionKey, Side};
+use rust_decimal::Decimal;
 use tokio::sync::Mutex;
 
+use crate::config::AppConfig;
+use crate::execution::clob_client::ClobClient;
+use crate::metrics::Metrics;
 use crate::telegram_bot::alerts::AlertBroadcaster;
 
-use super::positions::PositionManager;
+use super::{positions::PositionManager, sqlite::{PersistedPositionRow, SqliteStore}};
 
 /// v2.5: Reconciliation engine with light (30s) and full (5min) modes.
-/// Source of truth: on-chain > CLOB API > Redis cache.
+/// Source of truth: remote trading state in live/shadow, SQLite snapshot in simulation.
 pub struct Reconciler {
+    config: Arc<AppConfig>,
+    metrics: Arc<Metrics>,
     light_interval_secs: u64,
     full_interval_secs: u64,
     position_manager: Arc<Mutex<PositionManager>>,
+    sqlite_path: String,
     alerts: Option<AlertBroadcaster>,
 }
 
 impl Reconciler {
-    pub fn new(position_manager: Arc<Mutex<PositionManager>>) -> Self {
+    pub fn new(
+        config: Arc<AppConfig>,
+        metrics: Arc<Metrics>,
+        position_manager: Arc<Mutex<PositionManager>>,
+    ) -> Self {
         Self {
+            config,
+            metrics,
             light_interval_secs: LIGHT_RECONCILIATION_INTERVAL_SECS,
             full_interval_secs: FULL_RECONCILIATION_INTERVAL_SECS,
             position_manager,
+            sqlite_path: std::env::var("POLYBOT_SQLITE_PATH")
+                .unwrap_or_else(|_| "./polybot.db".to_string()),
             alerts: None,
         }
     }
@@ -42,13 +60,13 @@ impl Reconciler {
     /// Run light reconciliation
     pub async fn run_light(&self) -> Result<ReconciliationResult, PolybotError> {
         tracing::debug!("Running light reconciliation");
-        self.reconcile_local().await
+        self.reconcile(false).await
     }
 
     /// Run full reconciliation
     pub async fn run_full(&self) -> Result<ReconciliationResult, PolybotError> {
         tracing::debug!("Running full reconciliation");
-        self.reconcile_local().await
+        self.reconcile(true).await
     }
 
     /// Force reconciliation (triggered by /reconcile force command)
@@ -112,25 +130,353 @@ impl Reconciler {
         }
     }
 
-    async fn reconcile_local(&self) -> Result<ReconciliationResult, PolybotError> {
-        let local_positions = {
-            let positions = self.position_manager.lock().await;
-            positions
-                .get_positions_vec()
-                .into_iter()
-                .cloned()
-                .collect::<Vec<_>>()
-        };
+    async fn reconcile(&self, apply_snapshot: bool) -> Result<ReconciliationResult, PolybotError> {
+        let local_positions = self.local_snapshots().await;
+        let reference = self.reference_snapshots(apply_snapshot).await?;
+        let result = diff_snapshots(&local_positions, &reference.positions);
 
-        let checked = local_positions.len() as u32;
-        
-        Ok(ReconciliationResult {
-            checked,
-            ghost_positions: Vec::new(),
-            missing_positions: Vec::new(),
-            mismatches: Vec::new(),
+        if apply_snapshot {
+            self.sync_to_reference(&local_positions, &reference)
+                .await?;
+        }
+
+        self.persist_last_reconciliation_at()?;
+
+        Ok(result)
+    }
+
+    async fn local_snapshots(&self) -> Vec<PositionSnapshot> {
+        let positions = self.position_manager.lock().await;
+        positions
+            .get_positions_vec()
+            .into_iter()
+            .map(PositionSnapshot::from_position)
+            .collect()
+    }
+
+    async fn reference_snapshots(&self, apply_snapshot: bool) -> Result<ReferenceSnapshot, PolybotError> {
+        if apply_snapshot && self.config.system.execution_mode.allows_network_market_data() {
+            return Ok(ReferenceSnapshot {
+                source: SnapshotSource::RemoteDataApi,
+                positions: self.fetch_remote_positions().await?,
+            });
+        }
+
+        Ok(ReferenceSnapshot {
+            source: SnapshotSource::Sqlite,
+            positions: self.fetch_sqlite_positions()?,
         })
     }
+
+    async fn fetch_remote_positions(&self) -> Result<Vec<PositionSnapshot>, PolybotError> {
+        let clob_client = ClobClient::from_env()?;
+        let wallet_address = clob_client.trading_wallet_address()?;
+        let client = polymarket_client_sdk::data::Client::new(&self.config.scanner.data_api_url)
+            .map_err(|e| PolybotError::State(format!("Failed to create Data API client: {}", e)))?;
+        let mut offset = 0;
+        let mut snapshots = Vec::new();
+
+        loop {
+            let request = polymarket_client_sdk::data::types::request::PositionsRequest::builder()
+                .user(wallet_address)
+                .limit(500)
+                .map_err(|e| PolybotError::State(format!("Invalid reconciliation positions request: {}", e)))?
+                .offset(offset)
+                .map_err(|e| PolybotError::State(format!("Invalid reconciliation positions offset: {}", e)))?
+                .build();
+            let positions = client
+                .positions(&request)
+                .await
+                .map_err(|e| PolybotError::State(format!("Failed to fetch remote positions: {}", e)))?;
+            let batch_size = positions.len();
+
+            snapshots.extend(
+                positions
+                    .into_iter()
+                    .filter_map(PositionSnapshot::from_remote_position),
+            );
+
+            if batch_size < 500 {
+                break;
+            }
+
+            offset += batch_size as i32;
+        }
+
+        Ok(snapshots)
+    }
+
+    fn fetch_sqlite_positions(&self) -> Result<Vec<PositionSnapshot>, PolybotError> {
+        let store = self.open_store()?;
+        store
+            .list_open_positions()
+            .map(|rows| rows.into_iter().map(PositionSnapshot::from_persisted_position).collect())
+    }
+
+    fn persist_last_reconciliation_at(&self) -> Result<(), PolybotError> {
+        let store = self.open_store()?;
+        store.set_config("last_reconciliation_at", &chrono::Utc::now().to_rfc3339())
+    }
+
+    fn open_store(&self) -> Result<SqliteStore, PolybotError> {
+        SqliteStore::open(std::path::Path::new(&self.sqlite_path))
+    }
+
+    async fn sync_to_reference(
+        &self,
+        local_positions: &[PositionSnapshot],
+        reference: &ReferenceSnapshot,
+    ) -> Result<(), PolybotError> {
+        let store = self.open_store()?;
+        let persisted_rows = store.list_open_positions()?;
+        let persisted_by_key = persisted_rows
+            .into_iter()
+            .map(PositionSnapshot::from_persisted_position)
+            .map(|snapshot| (snapshot.key(), snapshot))
+            .collect::<HashMap<_, _>>();
+        let local_by_key = local_positions
+            .iter()
+            .cloned()
+            .map(|snapshot| (snapshot.key(), snapshot))
+            .collect::<HashMap<_, _>>();
+
+        let restored_snapshots = reference.positions.clone();
+
+        let reference_keys = restored_snapshots
+            .iter()
+            .map(PositionSnapshot::key)
+            .collect::<HashSet<_>>();
+
+        let restored_positions = restored_snapshots
+            .iter()
+            .map(|snapshot| {
+                snapshot.to_position(
+                    local_by_key.get(&snapshot.key()),
+                    persisted_by_key.get(&snapshot.key()),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        {
+            let mut manager = self.position_manager.lock().await;
+            manager.restore_positions(restored_positions.clone());
+        }
+        self.metrics.set_open_positions(restored_positions.len() as u32);
+
+        for persisted in persisted_by_key.values() {
+            if !reference_keys.contains(&persisted.key()) {
+                let mut ghost = persisted.to_position(None, None);
+                ghost.status = polybot_common::types::PositionStatus::Ghost;
+                store.upsert_position(
+                    &ghost,
+                    persisted.current_price,
+                    persisted.unrealized_pnl,
+                    persisted.owned_by_wallet.as_deref(),
+                )?;
+            }
+        }
+
+        for snapshot in &restored_snapshots {
+            let key = snapshot.key();
+            let restored = snapshot.to_position(local_by_key.get(&key), persisted_by_key.get(&key));
+            let owner = snapshot.owned_by_wallet.clone().or_else(|| {
+                persisted_by_key
+                    .get(&key)
+                    .and_then(|entry| entry.owned_by_wallet.clone())
+            });
+            store.upsert_position(
+                &restored,
+                snapshot.current_price,
+                snapshot.unrealized_pnl,
+                owner.as_deref(),
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapshotSource {
+    Sqlite,
+    RemoteDataApi,
+}
+
+#[derive(Debug, Clone)]
+struct ReferenceSnapshot {
+    source: SnapshotSource,
+    positions: Vec<PositionSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct PositionSnapshot {
+    market_id: String,
+    side: Side,
+    current_size: Decimal,
+    average_price: Decimal,
+    current_price: Option<Decimal>,
+    unrealized_pnl: Option<Decimal>,
+    category: Category,
+    id: Option<String>,
+    opened_at: Option<chrono::DateTime<chrono::Utc>>,
+    owned_by_wallet: Option<String>,
+}
+
+impl PositionSnapshot {
+    fn key(&self) -> PositionKey {
+        PositionKey::new(self.market_id.clone(), self.side)
+    }
+
+    fn from_position(position: &Position) -> Self {
+        Self {
+            market_id: position.market_id.to_lowercase(),
+            side: position.side,
+            current_size: position.current_size,
+            average_price: position.average_price,
+            current_price: None,
+            unrealized_pnl: None,
+            category: position.category,
+            id: Some(position.id.clone()),
+            opened_at: Some(position.opened_at),
+            owned_by_wallet: None,
+        }
+    }
+
+    fn from_persisted_position(row: PersistedPositionRow) -> Self {
+        Self {
+            market_id: row.position.market_id.to_lowercase(),
+            side: row.position.side,
+            current_size: row.position.current_size,
+            average_price: row.position.average_price,
+            current_price: row.current_price,
+            unrealized_pnl: row.unrealized_pnl,
+            category: row.position.category,
+            id: Some(row.position.id),
+            opened_at: Some(row.position.opened_at),
+            owned_by_wallet: row.owned_by_wallet,
+        }
+    }
+
+    fn from_remote_position(
+        position: polymarket_client_sdk::data::types::response::Position,
+    ) -> Option<Self> {
+        let side = match position.outcome.to_ascii_lowercase().as_str() {
+            "yes" => Side::Yes,
+            "no" => Side::No,
+            other => {
+                tracing::warn!(
+                    market_id = %position.condition_id,
+                    outcome = %other,
+                    "Skipping unsupported remote position outcome during reconciliation"
+                );
+                return None;
+            }
+        };
+
+        Some(Self {
+            market_id: position.condition_id.to_string().to_lowercase(),
+            side,
+            current_size: position.size,
+            average_price: position.avg_price,
+            current_price: Some(position.cur_price),
+            unrealized_pnl: Some(position.cash_pnl),
+            category: Category::Other,
+            id: None,
+            opened_at: None,
+            owned_by_wallet: None,
+        })
+    }
+
+    fn to_position(
+        &self,
+        local: Option<&PositionSnapshot>,
+        persisted: Option<&PositionSnapshot>,
+    ) -> Position {
+        let metadata = local.or(persisted);
+        Position {
+            id: metadata
+                .and_then(|entry| entry.id.clone())
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            market_id: self.market_id.clone(),
+            side: self.side,
+            entry_price: self.average_price,
+            current_size: self.current_size,
+            average_price: self.average_price,
+            opened_at: metadata
+                .and_then(|entry| entry.opened_at.as_ref().cloned())
+                .unwrap_or_else(chrono::Utc::now),
+            status: polybot_common::types::PositionStatus::Open,
+            category: metadata.map(|entry| entry.category).unwrap_or(self.category),
+        }
+    }
+}
+
+fn diff_snapshots(
+    local_positions: &[PositionSnapshot],
+    reference_positions: &[PositionSnapshot],
+) -> ReconciliationResult {
+    let local_by_key = local_positions
+        .iter()
+        .map(|snapshot| (snapshot.key(), snapshot))
+        .collect::<HashMap<_, _>>();
+    let reference_by_key = reference_positions
+        .iter()
+        .map(|snapshot| (snapshot.key(), snapshot))
+        .collect::<HashMap<_, _>>();
+
+    let mut ghost_positions = local_by_key
+        .keys()
+        .filter(|key| !reference_by_key.contains_key(*key))
+        .map(format_position_key)
+        .collect::<Vec<_>>();
+    let mut missing_positions = reference_by_key
+        .keys()
+        .filter(|key| !local_by_key.contains_key(*key))
+        .map(format_position_key)
+        .collect::<Vec<_>>();
+    let mut mismatches = reference_by_key
+        .iter()
+        .filter_map(|(key, reference)| {
+            let local = local_by_key.get(key)?;
+            if decimals_close(local.current_size, reference.current_size)
+                && decimals_close(local.average_price, reference.average_price)
+            {
+                None
+            } else {
+                Some(format_position_key(key))
+            }
+        })
+        .collect::<Vec<_>>();
+
+    ghost_positions.sort();
+    missing_positions.sort();
+    mismatches.sort();
+
+    let checked = local_by_key
+        .keys()
+        .chain(reference_by_key.keys())
+        .cloned()
+        .collect::<HashSet<_>>()
+        .len() as u32;
+
+    ReconciliationResult {
+        checked,
+        ghost_positions,
+        missing_positions,
+        mismatches,
+    }
+}
+
+fn decimals_close(left: Decimal, right: Decimal) -> bool {
+    (left - right).abs() <= rust_decimal_macros::dec!(0.0001)
+}
+
+fn format_position_key(key: &PositionKey) -> String {
+    let side = match key.side {
+        Side::Yes => "YES",
+        Side::No => "NO",
+    };
+    format!("{}:{}", key.market_id, side)
 }
 
 #[derive(Debug, Clone)]
@@ -138,7 +484,7 @@ pub struct ReconciliationResult {
     pub checked: u32,
     pub ghost_positions: Vec<String>,
     pub missing_positions: Vec<String>,
-    pub mismatches: Vec<String>,      // position data differs
+    pub mismatches: Vec<String>,
 }
 
 impl ReconciliationResult {
@@ -176,29 +522,193 @@ impl ReconciliationResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::AppConfig;
+    use crate::metrics::Metrics;
+    use polybot_common::types::{PositionStatus, Side};
+    use rust_decimal_macros::dec;
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn test_position(market_id: &str, side: Side, size: rust_decimal::Decimal) -> Position {
+        Position {
+            id: format!("{}-{side:?}", market_id),
+            market_id: market_id.to_string(),
+            side,
+            entry_price: dec!(0.55),
+            current_size: size,
+            average_price: dec!(0.55),
+            opened_at: chrono::Utc::now(),
+            status: PositionStatus::Open,
+            category: Category::Politics,
+        }
+    }
+
+    fn test_reconciler(
+        position_manager: Arc<Mutex<PositionManager>>,
+    ) -> (Reconciler, Arc<Metrics>, std::path::PathBuf, std::sync::MutexGuard<'static, ()>) {
+        let guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let sqlite_path = std::env::temp_dir().join(format!(
+            "polybot-reconcile-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        std::env::set_var("POLYBOT_SQLITE_PATH", &sqlite_path);
+
+        let metrics = Arc::new(Metrics::new());
+        let reconciler = Reconciler::new(
+            Arc::new(AppConfig::default()),
+            metrics.clone(),
+            position_manager,
+        );
+        (reconciler, metrics, sqlite_path, guard)
+    }
 
     #[test]
     fn reconciler_create() {
         let pm = Arc::new(Mutex::new(PositionManager::new()));
-        let _r = Reconciler::new(pm);
+        let _r = Reconciler::new(Arc::new(AppConfig::default()), Arc::new(Metrics::new()), pm);
     }
 
     #[tokio::test]
     async fn light_reconciliation_no_issues() {
         let pm = Arc::new(Mutex::new(PositionManager::new()));
-        let r = Reconciler::new(pm);
+        let (r, _metrics, sqlite_path, _guard) = test_reconciler(pm);
         let result = r.run_light().await.unwrap();
         assert_eq!(result.checked, 0);
         assert!(!result.has_issues());
+        let _ = std::fs::remove_file(sqlite_path);
     }
 
     #[tokio::test]
     async fn full_reconciliation_no_issues() {
         let pm = Arc::new(Mutex::new(PositionManager::new()));
-        let r = Reconciler::new(pm);
+        let (r, _metrics, sqlite_path, _guard) = test_reconciler(pm);
         let result = r.run_full().await.unwrap();
         assert_eq!(result.checked, 0);
         assert!(!result.has_issues());
+        let _ = std::fs::remove_file(sqlite_path);
+    }
+
+    #[tokio::test]
+    async fn light_reconciliation_detects_missing_ghost_and_mismatch_positions() {
+        let pm = Arc::new(Mutex::new(PositionManager::new()));
+        {
+            let mut manager = pm.lock().await;
+            manager.restore_positions(vec![
+                test_position("market-ghost", Side::Yes, dec!(10)),
+                test_position("market-mismatch", Side::No, dec!(10)),
+            ]);
+        }
+
+        let (r, _metrics, sqlite_path, _guard) = test_reconciler(pm.clone());
+        let store = crate::state::sqlite::SqliteStore::open(&sqlite_path).unwrap();
+        store
+            .upsert_position(
+                &test_position("market-missing", Side::Yes, dec!(12)),
+                Some(dec!(0.60)),
+                Some(dec!(1)),
+                Some("0xsource"),
+            )
+            .unwrap();
+        store
+            .upsert_position(
+                &test_position("market-mismatch", Side::No, dec!(15)),
+                Some(dec!(0.62)),
+                Some(dec!(2)),
+                Some("0xsource"),
+            )
+            .unwrap();
+
+        let result = r.run_light().await.unwrap();
+
+        assert_eq!(result.checked, 3);
+        assert_eq!(result.ghost_positions, vec!["market-ghost:YES"]);
+        assert_eq!(result.missing_positions, vec!["market-missing:YES"]);
+        assert_eq!(result.mismatches, vec!["market-mismatch:NO"]);
+
+        let _ = std::fs::remove_file(sqlite_path);
+    }
+
+    #[tokio::test]
+    async fn full_reconciliation_restores_positions_from_reference_snapshot() {
+        let pm = Arc::new(Mutex::new(PositionManager::new()));
+        {
+            let mut manager = pm.lock().await;
+            manager.restore_positions(vec![test_position("market-local", Side::Yes, dec!(10))]);
+        }
+
+        let (r, metrics, sqlite_path, _guard) = test_reconciler(pm.clone());
+        let store = crate::state::sqlite::SqliteStore::open(&sqlite_path).unwrap();
+        store
+            .upsert_position(
+                &test_position("market-remote", Side::No, dec!(25)),
+                Some(dec!(0.70)),
+                Some(dec!(3)),
+                Some("0xsource"),
+            )
+            .unwrap();
+
+        let result = r.run_full().await.unwrap();
+        assert!(result.has_issues());
+
+        let manager = pm.lock().await;
+        assert!(manager.get_position(&PositionKey::new("market-local", Side::Yes)).is_none());
+        let restored = manager
+            .get_position(&PositionKey::new("market-remote", Side::No))
+            .unwrap();
+        assert_eq!(restored.current_size, dec!(25));
+        drop(manager);
+
+        assert_eq!(
+            metrics.open_positions.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert!(store.get_config("last_reconciliation_at").unwrap().is_some());
+
+        let _ = std::fs::remove_file(sqlite_path);
+    }
+
+    #[tokio::test]
+    async fn remote_full_reconciliation_replaces_local_only_positions() {
+        let pm = Arc::new(Mutex::new(PositionManager::new()));
+        let (r, metrics, sqlite_path, _guard) = test_reconciler(pm.clone());
+
+        let local_positions = vec![PositionSnapshot::from_position(&test_position(
+            "market-local",
+            Side::Yes,
+            dec!(10),
+        ))];
+        let remote_positions = vec![PositionSnapshot::from_persisted_position(
+            crate::state::sqlite::PersistedPositionRow {
+                position: test_position("market-remote", Side::No, dec!(25)),
+                current_price: Some(dec!(0.70)),
+                unrealized_pnl: Some(dec!(3)),
+                owned_by_wallet: Some("0xsource".to_string()),
+                last_updated: chrono::Utc::now().to_rfc3339(),
+            },
+        )];
+
+        r.sync_to_reference(
+            &local_positions,
+            &ReferenceSnapshot {
+                source: SnapshotSource::RemoteDataApi,
+                positions: remote_positions,
+            },
+        )
+        .await
+        .unwrap();
+
+        let manager = pm.lock().await;
+        assert!(manager.get_position(&PositionKey::new("market-local", Side::Yes)).is_none());
+        assert!(manager
+            .get_position(&PositionKey::new("market-remote", Side::No))
+            .is_some());
+        drop(manager);
+
+        assert_eq!(
+            metrics.open_positions.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        let _ = std::fs::remove_file(sqlite_path);
     }
 
     #[test]
