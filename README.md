@@ -129,6 +129,8 @@ POLYBOT_EXECUTION_MODE=simulation
 POLYBOT_SQLITE_PATH=./polybot.db
 POLYBOT_LOG_LEVEL=info
 POLYBOT_DASHBOARD_CONTROL_KEY=change-this-local-control-key
+POLYBOT_PAPER_STARTING_BALANCE_USD=1000
+POLYBOT_PAPER_FIXED_ENTRY_PRICE=0.50
 ```
 
 Target wallets and API keys can be added when you are ready to ingest real activity.
@@ -159,40 +161,26 @@ http://127.0.0.1:8080
 
 The dashboard served by `polybot-core` is the main local operator surface.
 
-## Paper Starting Balance
+## Paper Balance And Entry Price
 
-The paper starting balance is derived from:
+Paper capital is now explicit. It is not derived from risk sizing.
 
-```text
-base_size_usd / base_size_pct
-```
-
-Current defaults:
+Default paper config:
 
 ```toml
-base_size_usd = 50
-base_size_pct = 0.015
+[paper]
+starting_balance_usd = 1000
+fixed_entry_price = 0.50
 ```
 
-That gives an effective paper portfolio of about:
+Environment overrides:
 
-```text
-50 / 0.015 = 3333.33
+```env
+POLYBOT_PAPER_STARTING_BALANCE_USD=1000
+POLYBOT_PAPER_FIXED_ENTRY_PRICE=0.50
 ```
 
-If you want exactly `$1,000` paper balance, use one of these:
-
-```toml
-base_size_usd = 15
-base_size_pct = 0.015
-```
-
-or:
-
-```toml
-base_size_usd = 50
-base_size_pct = 0.05
-```
+The dashboard portfolio value starts from the configured paper balance plus realized and unrealized PnL. Virtual pUSD is available cash after open exposure is reserved. Paper fills use the fixed entry price so local simulations are deterministic and do not pretend to have live orderbook liquidity.
 
 ## Dashboard
 
@@ -269,6 +257,10 @@ Important paper/risk values:
 [system]
 execution_mode = "simulation"
 
+[paper]
+starting_balance_usd = 1000
+fixed_entry_price = 0.50
+
 [risk]
 base_size_usd = 50
 base_size_pct = 0.015
@@ -340,6 +332,15 @@ cargo run -p polybot-core -- --setup-check
 ```
 
 ## Operator Runbook
+
+What is still operator-only before real live trading:
+
+- Add real `POLYMARKET_PRIVATE_KEY`, complete `RELAYER_*`, and valid `BUILDER_CODE`.
+- Set `POLYBOT_ENABLE_LIVE_V2=true` and `POLYBOT_EXECUTION_MODE=live` intentionally.
+- Set `POLYBOT_V2_VERIFY_CONDITION_ID` to an active market condition ID.
+- Fund the wallet with tiny smoke-test capital first, not meaningful capital.
+- Run `cargo run -p polybot-core -- --setup-check` and do not continue unless it passes.
+- Submit one tiny order, verify `/positions`, `/transactions`, dashboard controls, and Telegram alerts.
 
 Useful local checks:
 
