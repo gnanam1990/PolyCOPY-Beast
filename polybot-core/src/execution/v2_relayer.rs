@@ -74,10 +74,17 @@ pub fn apply_poll_response(
     record: &mut TransactionRecord,
     response: &RelayerTransactionResponse,
 ) -> Result<(), PolybotError> {
+    if record.transaction_id != response.transaction_id {
+        return Err(PolybotError::Execution(format!(
+            "relayer poll response transaction id mismatch: expected {}, got {}",
+            record.transaction_id, response.transaction_id
+        )));
+    }
+
     record.state = map_transaction_state(&response.state)?;
     record.transaction_hash = response.transaction_hash.clone();
     record.error_msg = response.error_msg.clone();
-    if record.state.is_terminal() {
+    if record.state.is_terminal() && record.confirmed_at.is_none() {
         record.confirmed_at = Some(Utc::now());
     }
     Ok(())
@@ -137,5 +144,49 @@ mod tests {
         assert_eq!(record.state, TransactionState::Success);
         assert_eq!(record.transaction_hash.as_deref(), Some("0xabc"));
         assert!(record.confirmed_at.is_some());
+    }
+
+    #[test]
+    fn poll_response_rejects_mismatched_transaction_id() {
+        let response = RelayerSubmitResponse {
+            transaction_id: "txn_abc".to_string(),
+            state: "STATE_NEW".to_string(),
+        };
+        let mut record =
+            transaction_record_from_submit(&response, Some("trade-1".to_string())).unwrap();
+        let poll = RelayerTransactionResponse {
+            transaction_id: "txn_other".to_string(),
+            state: "STATE_SUCCESS".to_string(),
+            transaction_hash: Some("0xabc".to_string()),
+            error_msg: None,
+        };
+
+        let error = apply_poll_response(&mut record, &poll).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("relayer poll response transaction id mismatch"));
+        assert_eq!(record.state, TransactionState::New);
+        assert!(record.transaction_hash.is_none());
+    }
+
+    #[test]
+    fn terminal_poll_preserves_existing_confirmation_time() {
+        let response = RelayerSubmitResponse {
+            transaction_id: "txn_abc".to_string(),
+            state: "STATE_NEW".to_string(),
+        };
+        let mut record =
+            transaction_record_from_submit(&response, Some("trade-1".to_string())).unwrap();
+        let original_confirmed_at = Utc::now() - chrono::Duration::seconds(60);
+        record.confirmed_at = Some(original_confirmed_at);
+        let poll = RelayerTransactionResponse {
+            transaction_id: "txn_abc".to_string(),
+            state: "STATE_SUCCESS".to_string(),
+            transaction_hash: Some("0xabc".to_string()),
+            error_msg: None,
+        };
+
+        apply_poll_response(&mut record, &poll).unwrap();
+        assert_eq!(record.confirmed_at, Some(original_confirmed_at));
     }
 }
