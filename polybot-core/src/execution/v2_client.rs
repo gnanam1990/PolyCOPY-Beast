@@ -1,5 +1,5 @@
 use polybot_common::errors::PolybotError;
-use polybot_common::types::TransactionState;
+use polybot_common::types::{OrderType, TransactionState};
 
 use crate::config::RelayerConfig;
 
@@ -13,7 +13,10 @@ pub struct RelayerClient {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RelayerSubmitRequest {
-    pub signed_order: serde_json::Value,
+    pub order: serde_json::Value,
+    pub owner: String,
+    #[serde(rename = "orderType")]
+    pub order_type: String,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -32,6 +35,15 @@ pub struct RelayerTransactionResponse {
     pub transaction_hash: Option<String>,
     #[serde(default)]
     pub error_msg: Option<String>,
+}
+
+fn order_type_to_wire(order_type: OrderType) -> &'static str {
+    match order_type {
+        OrderType::Limit => "GTC",
+        OrderType::Ioc => "IOC",
+        OrderType::Fok => "FOK",
+        OrderType::PostOnly => "GTD",
+    }
 }
 
 impl RelayerClient {
@@ -60,10 +72,15 @@ impl RelayerClient {
     pub async fn submit_order(
         &self,
         signed_order: serde_json::Value,
+        order_type: OrderType,
     ) -> Result<RelayerSubmitResponse, PolybotError> {
         let response = self
             .with_auth_headers(self.http_client.post(format!("{}/order", self.base_url)))
-            .json(&RelayerSubmitRequest { signed_order })
+            .json(&RelayerSubmitRequest {
+                order: signed_order,
+                owner: self.api_key.clone(),
+                order_type: order_type_to_wire(order_type).to_string(),
+            })
             .send()
             .await
             .map_err(|e| {
@@ -145,8 +162,12 @@ pub fn map_transaction_state(raw: &str) -> Result<TransactionState, PolybotError
         "STATE_NEW" => Ok(TransactionState::New),
         "STATE_PENDING" => Ok(TransactionState::Pending),
         "STATE_SUBMITTED" => Ok(TransactionState::Submitted),
+        "STATE_EXECUTED" => Ok(TransactionState::Executed),
+        "STATE_MINED" => Ok(TransactionState::Mined),
         "STATE_SUCCESS" => Ok(TransactionState::Success),
+        "STATE_CONFIRMED" => Ok(TransactionState::Confirmed),
         "STATE_FAILED" => Ok(TransactionState::Failed),
+        "STATE_INVALID" => Ok(TransactionState::Invalid),
         other => Err(PolybotError::Execution(format!(
             "Unknown relayer state: {}",
             other
@@ -169,6 +190,7 @@ mod tests {
     struct CaptureState {
         api_key: Mutex<Option<String>>,
         api_key_address: Mutex<Option<String>>,
+        submit_body: Mutex<Option<serde_json::Value>>,
         transaction_id: Mutex<Option<String>>,
         poll_count: Mutex<u32>,
     }
@@ -182,6 +204,7 @@ mod tests {
     async fn submit_handler(
         State(state): State<Arc<CaptureState>>,
         headers: axum::http::HeaderMap,
+        Json(body): Json<serde_json::Value>,
     ) -> Json<serde_json::Value> {
         *state.api_key.lock().unwrap() = headers
             .get("RELAYER_API_KEY")
@@ -191,6 +214,7 @@ mod tests {
             .get("RELAYER_API_KEY_ADDRESS")
             .and_then(|v| v.to_str().ok())
             .map(|v| v.to_string());
+        *state.submit_body.lock().unwrap() = Some(body);
         Json(serde_json::json!({
             "transactionID": "txn_submit_1",
             "state": "STATE_NEW"
@@ -258,6 +282,12 @@ mod tests {
         assert!(map_transaction_state("STATE_SUCCESS")
             .unwrap()
             .is_terminal());
+        assert!(map_transaction_state("STATE_CONFIRMED")
+            .unwrap()
+            .is_terminal());
+        assert!(map_transaction_state("STATE_INVALID")
+            .unwrap()
+            .is_terminal());
         assert!(map_transaction_state("STATE_FAILED").unwrap().is_terminal());
     }
 
@@ -275,12 +305,20 @@ mod tests {
         let (client, state) = spawn_relayer_server().await;
 
         let response = client
-            .submit_order(serde_json::json!({"signed": "order"}))
+            .submit_order(serde_json::json!({"signed": "order"}), OrderType::Fok)
             .await
             .unwrap();
 
         assert_eq!(response.transaction_id, "txn_submit_1");
         assert_eq!(response.state, "STATE_NEW");
+        assert_eq!(
+            *state.submit_body.lock().unwrap(),
+            Some(serde_json::json!({
+                "order": {"signed": "order"},
+                "owner": "test-relayer-key",
+                "orderType": "FOK",
+            }))
+        );
         assert_eq!(
             state.api_key.lock().unwrap().as_deref(),
             Some("test-relayer-key")

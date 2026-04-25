@@ -5,7 +5,9 @@ pub mod rate_limiter;
 pub mod retry;
 pub mod transport;
 pub mod v2_client;
+pub mod v2_collateral;
 pub mod v2_flow;
+pub mod v2_market;
 pub mod v2_order;
 pub mod v2_relayer;
 pub mod v2_signing;
@@ -26,6 +28,36 @@ use crate::metrics::Metrics;
 use crate::risk::limits;
 use crate::telegram_bot::alerts::AlertBroadcaster;
 use transport::select_transport_mode;
+
+pub(crate) fn live_v2_submission_config(
+    config: &AppConfig,
+) -> Result<(&crate::config::RelayerConfig, &str), PolybotError> {
+    let relayer = config.relayer.as_ref().ok_or_else(|| {
+        PolybotError::Config(
+            "Live CLOB V2 requires RELAYER_URL, RELAYER_API_KEY, and RELAYER_API_KEY_ADDRESS; V1 fallback is disabled.".to_string(),
+        )
+    })?;
+    let builder = config.builder.as_ref().ok_or_else(|| {
+        PolybotError::Config(
+            "Live CLOB V2 requires BUILDER_CODE; V1 fallback is disabled.".to_string(),
+        )
+    })?;
+
+    if relayer.url.trim().is_empty()
+        || relayer.api_key.trim().is_empty()
+        || relayer.api_key_address.trim().is_empty()
+    {
+        return Err(PolybotError::Config(
+            "Live CLOB V2 relayer config cannot contain empty values.".to_string(),
+        ));
+    }
+
+    v2_signing::parse_builder_code(&builder.code).map_err(|err| {
+        PolybotError::Config(format!("Invalid BUILDER_CODE for live CLOB V2: {}", err))
+    })?;
+
+    Ok((relayer, builder.code.as_str()))
+}
 
 pub async fn cancel_open_orders_on_shutdown(config: Arc<AppConfig>) -> Result<(), PolybotError> {
     if !config.system.execution_mode.allows_live_order_submission() {
@@ -59,6 +91,12 @@ pub async fn run_execution_engine(
     );
 
     let retry_policy = retry::RetryPolicy::default();
+    let live_v2_submission = if transport_plan.submits_orders {
+        Some(live_v2_submission_config(config.as_ref())?)
+    } else {
+        None
+    };
+
     let market_data_client = transport_plan
         .uses_market_data
         .then(clob_client::ClobClient::public_readonly);
@@ -336,16 +374,14 @@ pub async fn run_execution_engine(
 
                         let started = Instant::now();
                         let mut attempt = 0u32;
-                        let relayer = config.relayer.clone();
-                        let builder = config.builder.clone();
+                        let (relayer, builder_code) = live_v2_submission.ok_or_else(|| {
+                            PolybotError::Config(
+                                "Live CLOB V2 submission config was not initialized.".to_string(),
+                            )
+                        })?;
                         loop {
-                            let submit_result = if let (Some(relayer), Some(builder)) =
-                                (relayer.as_ref(), builder.as_ref())
-                            {
-                                client.submit_order_v2(&order, relayer, &builder.code).await
-                            } else {
-                                client.submit_order(&order).await
-                            };
+                            let submit_result =
+                                client.submit_order_v2(&order, relayer, builder_code).await;
                             match submit_result {
                                 Ok(trade) => {
                                     if matches!(trade.status, TradeStatus::PartiallyFilled) {
@@ -450,6 +486,20 @@ pub async fn run_execution_engine(
 mod tests {
     use polybot_common::types::ExecutionMode;
 
+    use crate::config::{AppConfig, BuilderConfig, RelayerConfig};
+
+    fn valid_builder_code() -> String {
+        format!("0x{}", "00".repeat(32))
+    }
+
+    fn valid_relayer_config() -> RelayerConfig {
+        RelayerConfig {
+            url: "https://relayer-v2.polymarket.com".to_string(),
+            api_key: "test-relayer-key".to_string(),
+            api_key_address: "0x1234567890123456789012345678901234567890".to_string(),
+        }
+    }
+
     #[test]
     fn simulation_mode_uses_fully_offline_transport() {
         let plan = super::transport::select_transport_mode(ExecutionMode::Simulation);
@@ -479,5 +529,60 @@ mod tests {
     #[test]
     fn simulation_transaction_id_is_stable_for_signal() {
         assert_eq!(super::simulation_transaction_id("abc"), "sim-abc");
+    }
+
+    #[test]
+    fn live_v2_submission_config_requires_relayer() {
+        let mut config = AppConfig {
+            builder: Some(BuilderConfig {
+                code: valid_builder_code(),
+            }),
+            ..AppConfig::default()
+        };
+        config.relayer = None;
+
+        let err = super::live_v2_submission_config(&config).unwrap_err();
+        assert!(err.to_string().contains("RELAYER_URL"));
+    }
+
+    #[test]
+    fn live_v2_submission_config_requires_builder() {
+        let mut config = AppConfig {
+            relayer: Some(valid_relayer_config()),
+            ..AppConfig::default()
+        };
+        config.builder = None;
+
+        let err = super::live_v2_submission_config(&config).unwrap_err();
+        assert!(err.to_string().contains("BUILDER_CODE"));
+    }
+
+    #[test]
+    fn live_v2_submission_config_rejects_invalid_builder_code() {
+        let config = AppConfig {
+            relayer: Some(valid_relayer_config()),
+            builder: Some(BuilderConfig {
+                code: "0xdeadbeef".to_string(),
+            }),
+            ..AppConfig::default()
+        };
+
+        let err = super::live_v2_submission_config(&config).unwrap_err();
+        assert!(err.to_string().contains("Invalid BUILDER_CODE"));
+    }
+
+    #[test]
+    fn live_v2_submission_config_accepts_complete_v2_config() {
+        let config = AppConfig {
+            relayer: Some(valid_relayer_config()),
+            builder: Some(BuilderConfig {
+                code: valid_builder_code(),
+            }),
+            ..AppConfig::default()
+        };
+
+        let (relayer, builder_code) = super::live_v2_submission_config(&config).unwrap();
+        assert_eq!(relayer.url, "https://relayer-v2.polymarket.com");
+        assert_eq!(builder_code, valid_builder_code());
     }
 }

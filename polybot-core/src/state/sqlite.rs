@@ -1162,6 +1162,7 @@ impl SqliteStore {
             "order" => TransactionKind::Order,
             "cancel" => TransactionKind::Cancel,
             "wrap" => TransactionKind::Wrap,
+            "unwrap" => TransactionKind::Unwrap,
             "approve" => TransactionKind::Approve,
             "redeem" => TransactionKind::Redeem,
             "deploy" => TransactionKind::Deploy,
@@ -1177,8 +1178,12 @@ impl SqliteStore {
             "STATE_NEW" => TransactionState::New,
             "STATE_PENDING" => TransactionState::Pending,
             "STATE_SUBMITTED" => TransactionState::Submitted,
+            "STATE_EXECUTED" => TransactionState::Executed,
+            "STATE_MINED" => TransactionState::Mined,
             "STATE_SUCCESS" => TransactionState::Success,
+            "STATE_CONFIRMED" => TransactionState::Confirmed,
             "STATE_FAILED" => TransactionState::Failed,
+            "STATE_INVALID" => TransactionState::Invalid,
             other => {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     3,

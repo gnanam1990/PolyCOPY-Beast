@@ -49,6 +49,22 @@ fn default_use_websocket() -> bool {
     true
 }
 
+fn default_pusd_address() -> String {
+    "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB".to_string()
+}
+
+fn default_collateral_onramp_address() -> String {
+    "0x93070a847efEf7F70739046A929D47a521F5B8ee".to_string()
+}
+
+fn default_collateral_offramp_address() -> String {
+    "0x2957922Eb93258b93368531d39fAcCA3B4dC5854".to_string()
+}
+
+fn default_usdc_e_address() -> String {
+    "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".to_string()
+}
+
 fn default_fok_max_fee_bps() -> u32 {
     50
 }
@@ -184,19 +200,27 @@ pub struct RelayerConfig {
 pub struct CollateralConfig {
     /// V2 collateral token symbol. Always `"pUSD"` in v3.2.
     pub token: String,
+    #[serde(default = "default_pusd_address")]
+    pub pusd_address: String,
     /// Address of the Collateral Onramp contract (USDC.e → pUSD wrapping).
     /// Empty until provided via COLLATERAL_ONRAMP_ADDRESS env var.
+    #[serde(default = "default_collateral_onramp_address")]
     pub onramp_address: String,
+    #[serde(default = "default_collateral_offramp_address")]
+    pub offramp_address: String,
     /// Polygon USDC.e token address. Defaults to the canonical
     /// 0x2791Bca1... per PRD §6.
+    #[serde(default = "default_usdc_e_address")]
     pub usdc_e_address: String,
 }
 
 fn default_collateral_config() -> CollateralConfig {
     CollateralConfig {
         token: "pUSD".to_string(),
-        onramp_address: String::new(),
-        usdc_e_address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".to_string(),
+        pusd_address: default_pusd_address(),
+        onramp_address: default_collateral_onramp_address(),
+        offramp_address: default_collateral_offramp_address(),
+        usdc_e_address: default_usdc_e_address(),
     }
 }
 
@@ -301,6 +325,12 @@ impl Default for AppConfig {
     }
 }
 
+fn is_hex_address(value: &str) -> bool {
+    value.starts_with("0x")
+        && value.len() == 42
+        && value[2..].chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
 impl AppConfig {
     fn reconcile_system_mode(&mut self) {
         if self.system.execution_mode == ExecutionMode::Simulation && !self.system.simulation {
@@ -400,6 +430,27 @@ impl AppConfig {
             return Err(PolybotError::Config(
                 "signal_max_age_secs must be > 0".to_string(),
             ));
+        }
+        if self.collateral.token != "pUSD" {
+            return Err(PolybotError::Config(
+                "collateral.token must be pUSD for CLOB V2".to_string(),
+            ));
+        }
+        for (name, address) in [
+            ("collateral.pusd_address", &self.collateral.pusd_address),
+            ("collateral.onramp_address", &self.collateral.onramp_address),
+            (
+                "collateral.offramp_address",
+                &self.collateral.offramp_address,
+            ),
+            ("collateral.usdc_e_address", &self.collateral.usdc_e_address),
+        ] {
+            if !is_hex_address(address) {
+                return Err(PolybotError::Config(format!(
+                    "{} must be a 0x-prefixed 20-byte address",
+                    name
+                )));
+            }
         }
         Ok(())
     }
@@ -532,6 +583,12 @@ impl AppConfig {
 
         if let Ok(val) = std::env::var("COLLATERAL_ONRAMP_ADDRESS") {
             self.collateral.onramp_address = val;
+        }
+        if let Ok(val) = std::env::var("COLLATERAL_OFFRAMP_ADDRESS") {
+            self.collateral.offramp_address = val;
+        }
+        if let Ok(val) = std::env::var("PUSD_ADDRESS") {
+            self.collateral.pusd_address = val;
         }
         if let Ok(val) = std::env::var("USDC_E_ADDRESS") {
             self.collateral.usdc_e_address = val;
@@ -760,10 +817,21 @@ port = 8080
         let config = AppConfig::default();
         assert_eq!(config.collateral.token, "pUSD");
         assert_eq!(
+            config.collateral.pusd_address,
+            "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"
+        );
+        assert_eq!(
+            config.collateral.onramp_address,
+            "0x93070a847efEf7F70739046A929D47a521F5B8ee"
+        );
+        assert_eq!(
+            config.collateral.offramp_address,
+            "0x2957922Eb93258b93368531d39fAcCA3B4dC5854"
+        );
+        assert_eq!(
             config.collateral.usdc_e_address,
             "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
         );
-        assert_eq!(config.collateral.onramp_address, "");
     }
 
     #[test]
@@ -777,6 +845,11 @@ port = 8080
             "USDC_E_ADDRESS",
             "0x1111111111111111111111111111111111111111",
         );
+        std::env::set_var("PUSD_ADDRESS", "0x2222222222222222222222222222222222222222");
+        std::env::set_var(
+            "COLLATERAL_OFFRAMP_ADDRESS",
+            "0x3333333333333333333333333333333333333333",
+        );
         let mut config = AppConfig::default();
         config.apply_env_overrides();
         assert_eq!(
@@ -784,11 +857,28 @@ port = 8080
             "0xabcdef0000000000000000000000000000000000"
         );
         assert_eq!(
+            config.collateral.pusd_address,
+            "0x2222222222222222222222222222222222222222"
+        );
+        assert_eq!(
+            config.collateral.offramp_address,
+            "0x3333333333333333333333333333333333333333"
+        );
+        assert_eq!(
             config.collateral.usdc_e_address,
             "0x1111111111111111111111111111111111111111"
         );
         std::env::remove_var("COLLATERAL_ONRAMP_ADDRESS");
+        std::env::remove_var("COLLATERAL_OFFRAMP_ADDRESS");
+        std::env::remove_var("PUSD_ADDRESS");
         std::env::remove_var("USDC_E_ADDRESS");
+    }
+
+    #[test]
+    fn collateral_config_rejects_invalid_addresses() {
+        let mut config = AppConfig::default();
+        config.collateral.pusd_address = "not-an-address".to_string();
+        assert!(config.validate().is_err());
     }
 
     #[test]

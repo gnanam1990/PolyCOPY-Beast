@@ -18,13 +18,9 @@ sol! {
         uint256 salt;
         address maker;
         address signer;
-        address taker;
         uint256 tokenId;
         uint256 makerAmount;
         uint256 takerAmount;
-        uint256 expiration;
-        uint256 nonce;
-        uint256 feeRateBps;
         uint8 side;
         uint8 signatureType;
         uint256 timestamp;
@@ -58,14 +54,10 @@ pub struct V2OrderPayload {
     pub salt: u64,
     pub maker: String,
     pub signer: String,
-    pub taker: String,
     pub token_id: String,
     pub side: u8,
     pub maker_amount: String,
     pub taker_amount: String,
-    pub expiration: u64,
-    pub nonce: u64,
-    pub fee_rate_bps: u64,
     pub signature_type: u8,
     pub signature: String,
     pub timestamp_ms: u64,
@@ -119,14 +111,10 @@ pub fn build_v2_order_payload(
         salt: generate_salt(timestamp_ms),
         maker: maker_address.to_string(),
         signer: signer_address.to_string(),
-        taker: "0x0000000000000000000000000000000000000000".to_string(),
         token_id: order.token_id.clone(),
         side,
         maker_amount,
         taker_amount,
-        expiration: 0,
-        nonce: 0,
-        fee_rate_bps: 0,
         signature_type: 0,
         signature: String::new(),
         timestamp_ms,
@@ -150,10 +138,6 @@ pub async fn sign_v2_order_payload<S: Signer>(
         .signer
         .parse()
         .map_err(|e| PolybotError::Execution(format!("Invalid signer address: {}", e)))?;
-    let taker: Address = payload
-        .taker
-        .parse()
-        .map_err(|e| PolybotError::Execution(format!("Invalid taker address: {}", e)))?;
     let token_id = U256::from_str_radix(&payload.token_id, 10)
         .map_err(|e| PolybotError::Execution(format!("Invalid token id for V2 signing: {}", e)))?;
     let maker_amount = U256::from_str_radix(&payload.maker_amount, 10)
@@ -173,13 +157,9 @@ pub async fn sign_v2_order_payload<S: Signer>(
         salt: U256::from(payload.salt),
         maker,
         signer: signer_addr,
-        taker,
         tokenId: token_id,
         makerAmount: maker_amount,
         takerAmount: taker_amount,
-        expiration: U256::from(payload.expiration),
-        nonce: U256::from(payload.nonce),
-        feeRateBps: U256::from(payload.fee_rate_bps),
         side: payload.side,
         signatureType: payload.signature_type,
         timestamp: U256::from(payload.timestamp_ms),
@@ -207,13 +187,9 @@ pub fn payload_to_relayer_json(payload: &V2OrderPayload) -> serde_json::Value {
         "salt": payload.salt,
         "maker": payload.maker,
         "signer": payload.signer,
-        "taker": payload.taker,
         "tokenId": payload.token_id,
         "makerAmount": payload.maker_amount,
         "takerAmount": payload.taker_amount,
-        "expiration": payload.expiration,
-        "nonce": payload.nonce,
-        "feeRateBps": payload.fee_rate_bps,
         "side": payload.side,
         "signatureType": payload.signature_type,
         "signature": payload.signature,
@@ -280,11 +256,43 @@ mod tests {
         .unwrap();
 
         assert_eq!(payload.side, 0);
-        assert_eq!(payload.fee_rate_bps, 0);
         assert_eq!(payload.signature_type, 0);
         assert_eq!(payload.timestamp_ms, 1_712_000_000_000);
         assert_eq!(payload.maker_amount, U256::from(5_000_000u64).to_string());
         assert_eq!(payload.taker_amount, U256::from(10_000_000u64).to_string());
+    }
+
+    #[test]
+    fn payload_to_relayer_json_omits_removed_v1_fields() {
+        let order = Order {
+            signal_id: "sig-1".to_string(),
+            source_wallet: "0xabc123abc123abc123abc123abc123abc123abc1".to_string(),
+            market_id: "market-1".to_string(),
+            token_id: "123456789".to_string(),
+            category: polybot_common::types::Category::Politics,
+            side: polybot_common::types::Side::Yes,
+            direction: TradeDirection::Buy,
+            price: rust_decimal_macros::dec!(0.50),
+            size: rust_decimal_macros::dec!(10),
+            size_usd: rust_decimal_macros::dec!(5),
+            order_type: polybot_common::types::OrderType::Limit,
+        };
+        let payload = build_v2_order_payload(
+            &order,
+            "0x0000000000000000000000000000000000000001",
+            "0x0000000000000000000000000000000000000002",
+            "0x00000000000000000000000000000000000000000000000000000000deadbeef",
+            1_712_000_000_000,
+        )
+        .unwrap();
+
+        let json = payload_to_relayer_json(&payload);
+
+        assert!(json.get("taker").is_none());
+        assert!(json.get("expiration").is_none());
+        assert!(json.get("nonce").is_none());
+        assert!(json.get("feeRateBps").is_none());
+        assert_eq!(json["timestamp"], 1_712_000_000_000u64);
     }
 
     #[tokio::test]
