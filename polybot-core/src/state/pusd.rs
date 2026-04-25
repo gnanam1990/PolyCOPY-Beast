@@ -58,9 +58,14 @@ impl VirtualPusdAccount {
                 "pUSD release amount must be positive".to_string(),
             ));
         }
-        let released = amount.min(self.reserved);
-        self.reserved -= released;
-        self.available += released;
+        if self.reserved < amount {
+            return Err(PolybotError::Risk(format!(
+                "insufficient reserved pUSD to release: reserved={}, release={}",
+                self.reserved, amount
+            )));
+        }
+        self.reserved -= amount;
+        self.available += amount;
         Ok(())
     }
 
@@ -75,6 +80,16 @@ impl VirtualPusdAccount {
                 "pUSD fill amount must be positive".to_string(),
             ));
         }
+        if fee < Decimal::ZERO {
+            return Err(PolybotError::Risk(
+                "pUSD fill fee must not be negative".to_string(),
+            ));
+        }
+        if rebate < Decimal::ZERO {
+            return Err(PolybotError::Risk(
+                "pUSD fill rebate must not be negative".to_string(),
+            ));
+        }
         if self.reserved < reserved_spend {
             return Err(PolybotError::Risk(format!(
                 "insufficient reserved pUSD: reserved={}, fill={}",
@@ -82,9 +97,9 @@ impl VirtualPusdAccount {
             )));
         }
         self.reserved -= reserved_spend;
-        self.fees_paid += fee.max(Decimal::ZERO);
-        self.rebates_earned += rebate.max(Decimal::ZERO);
-        self.available += rebate.max(Decimal::ZERO);
+        self.fees_paid += fee;
+        self.rebates_earned += rebate;
+        self.available += rebate;
         Ok(())
     }
 }
@@ -117,5 +132,32 @@ mod tests {
         let mut account = VirtualPusdAccount::new(dec!(10));
         let err = account.reserve(dec!(11)).unwrap_err();
         assert!(format!("{}", err).contains("insufficient virtual pUSD"));
+    }
+
+    #[test]
+    fn virtual_pusd_rejects_over_release() {
+        let mut account = VirtualPusdAccount::new(dec!(10));
+        account.reserve(dec!(4)).unwrap();
+
+        let err = account.release(dec!(5)).unwrap_err();
+        assert!(format!("{}", err).contains("insufficient reserved pUSD"));
+        assert_eq!(account.available(), dec!(6));
+        assert_eq!(account.reserved(), dec!(4));
+    }
+
+    #[test]
+    fn virtual_pusd_rejects_negative_fee_and_rebate() {
+        let mut account = VirtualPusdAccount::new(dec!(10));
+        account.reserve(dec!(4)).unwrap();
+
+        let fee_err = account.fill(dec!(1), dec!(-0.01), dec!(0)).unwrap_err();
+        assert!(format!("{}", fee_err).contains("fee must not be negative"));
+
+        let rebate_err = account.fill(dec!(1), dec!(0), dec!(-0.01)).unwrap_err();
+        assert!(format!("{}", rebate_err).contains("rebate must not be negative"));
+        assert_eq!(account.available(), dec!(6));
+        assert_eq!(account.reserved(), dec!(4));
+        assert_eq!(account.fees_paid(), dec!(0));
+        assert_eq!(account.rebates_earned(), dec!(0));
     }
 }

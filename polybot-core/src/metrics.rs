@@ -4,10 +4,23 @@ use tokio::sync::broadcast;
 
 fn decimal_to_cents(value: rust_decimal::Decimal) -> i64 {
     use rust_decimal::prelude::ToPrimitive;
-    (value * rust_decimal::Decimal::new(100, 0))
-        .round()
-        .to_i64()
-        .unwrap_or(0)
+    let Some(scaled) = value
+        .checked_mul(rust_decimal::Decimal::new(100, 0))
+        .map(|value| value.round())
+    else {
+        return if value < rust_decimal::Decimal::ZERO {
+            i64::MIN
+        } else {
+            i64::MAX
+        };
+    };
+    scaled.to_i64().unwrap_or_else(|| {
+        if scaled < rust_decimal::Decimal::ZERO {
+            i64::MIN
+        } else {
+            i64::MAX
+        }
+    })
 }
 
 /// Shared metrics state accessible from all modules.
@@ -343,6 +356,12 @@ mod tests {
         assert!((m.reserved_pusd() - 25.00).abs() < 0.01);
         assert!((m.fees_paid() - 0.15).abs() < 0.01);
         assert!((m.rebates_earned() - 0.07).abs() < 0.01);
+    }
+
+    #[test]
+    fn decimal_to_cents_saturates_on_overflow() {
+        assert_eq!(decimal_to_cents(rust_decimal::Decimal::MAX), i64::MAX);
+        assert_eq!(decimal_to_cents(rust_decimal::Decimal::MIN), i64::MIN);
     }
 
     #[test]
