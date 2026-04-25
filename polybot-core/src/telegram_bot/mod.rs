@@ -47,6 +47,25 @@ fn parse_wallet_args(s: String) -> Result<(String, Option<String>), ParseError> 
     }
 }
 
+fn parse_wrap_args(s: String) -> Result<(String,), ParseError> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        Err(ParseError::IncorrectFormat("Usage: /wrap <amount>".into()))
+    } else {
+        Ok((trimmed.to_string(),))
+    }
+}
+
+fn parse_redeem_args(s: String) -> Result<(String, String), ParseError> {
+    let args = s.split_whitespace().collect::<Vec<_>>();
+    match args.as_slice() {
+        [condition_id, index_sets] => Ok(((*condition_id).to_string(), (*index_sets).to_string())),
+        _ => Err(ParseError::IncorrectFormat(
+            "Usage: /redeem <condition_id> <index_sets_comma_separated>".into(),
+        )),
+    }
+}
+
 #[derive(BotCommands, Clone, Debug, PartialEq)]
 #[command(
     rename_rule = "lowercase",
@@ -74,6 +93,10 @@ pub enum Command {
     Wallet(String, Option<String>),
     #[command(description = "Stage mode change: /mode [sim|shadow|live]", parse_with = parse_mode_args)]
     Mode(Option<String>),
+    #[command(description = "Plan pUSD wrap: /wrap <amount>", parse_with = parse_wrap_args)]
+    Wrap(String),
+    #[command(description = "Plan resolved-position redeem: /redeem <condition_id> <index_sets>", parse_with = parse_redeem_args)]
+    Redeem(String, String),
     #[command(description = "Update runtime risk config: /config <key> <value>")]
     Config(String, String),
     #[command(description = "Force full reconciliation")]
@@ -189,5 +212,24 @@ mod tests {
 
         assert_eq!(report, Command::Report(Some("weekly".to_string())));
         assert_eq!(mode, Command::Mode(Some("live".to_string())));
+    }
+
+    #[test]
+    fn parse_wrap_and_redeem_commands() {
+        let wrap = Command::parse("/wrap 25.5", "polybot").unwrap();
+        assert_eq!(wrap, Command::Wrap("25.5".to_string()));
+
+        let redeem = Command::parse(
+            "/redeem 0xaf5e903876ad42de97e1cf02c2ef8484df69bcfc5541b96a400116557d1e504e 1,2",
+            "polybot",
+        )
+        .unwrap();
+        assert_eq!(
+            redeem,
+            Command::Redeem(
+                "0xaf5e903876ad42de97e1cf02c2ef8484df69bcfc5541b96a400116557d1e504e".to_string(),
+                "1,2".to_string()
+            )
+        );
     }
 }

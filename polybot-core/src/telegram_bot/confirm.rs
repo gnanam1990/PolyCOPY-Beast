@@ -3,6 +3,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use polybot_common::types::ExecutionMode;
+use rust_decimal::Decimal;
 
 /// v2.5: Two-step confirmation for destructive commands.
 /// After a destructive command, the user must send /confirm within 60 seconds.
@@ -21,6 +22,13 @@ pub enum ConfirmAction {
     WalletRemove(String),
     ResumeAfterLoss,
     ModeSwitch(ExecutionMode),
+    WrapCollateral {
+        amount: Decimal,
+    },
+    RedeemPositions {
+        condition_id: String,
+        index_sets: Vec<u64>,
+    },
 }
 
 const CONFIRM_TIMEOUT: Duration = Duration::from_secs(60);

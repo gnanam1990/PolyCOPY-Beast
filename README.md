@@ -27,7 +27,7 @@ This project is intentionally practical: no Redis requirement, no Docker require
 - Tracks virtual pUSD, reserved pUSD, fees, rebates, positions, daily stats, and recent signals.
 - Serves a local operator dashboard on port `8080`.
 - Exposes pause, resume, and emergency stop controls guarded by `POLYBOT_DASHBOARD_CONTROL_KEY`.
-- Supports Telegram operator commands with allowlisted users and confirmation safety.
+- Supports Telegram operator commands with allowlisted users, confirmation safety, wallet management, and collateral plan previews for `/wrap` and `/redeem`.
 
 ## Safety Model
 
@@ -226,6 +226,7 @@ RELAYER_URL=...
 RELAYER_API_KEY=...
 RELAYER_API_KEY_ADDRESS=...
 BUILDER_CODE=0x...
+POLYBOT_COLLATERAL_RECIPIENT_ADDRESS=0x...
 
 POLYBOT_CLOB_ENDPOINT=https://clob.polymarket.com
 POLYBOT_WS_ENDPOINT=wss://ws-subscriptions-clob.polymarket.com
@@ -341,6 +342,7 @@ What is still operator-only before real live trading:
 - Fund the wallet with tiny smoke-test capital first, not meaningful capital.
 - Run `cargo run -p polybot-core -- --setup-check` and do not continue unless it passes.
 - Submit one tiny order, verify `/positions`, `/transactions`, dashboard controls, and Telegram alerts.
+- Use Telegram `/wrap <amount>` and `/redeem <condition_id> <index_sets>` to preview gasless collateral calldata plans before any signed relayer submission.
 
 Useful local checks:
 
