@@ -199,12 +199,19 @@ pub async fn handle_command(
                     )
                 })
                 .unwrap_or_default();
+            let v2_status = format_v2_status(
+                &metrics,
+                config
+                    .system
+                    .simulation
+                    .then_some("simulation-complete milestone keeps live submission disabled"),
+            );
 
             bot.send_message(
                 msg.chat.id,
                 format!(
-                    "SuperFast PolyBot v3\nMode: {}\nStatus: {}\nUptime: {}\nPositions: {}\nSignals: {}\nFollowed wallets: {}\nWS: {}\nRPC: {}{}",
-                    mode, bot_status, uptime_fmt, open, sigs, wallets, ws, rpc, pending_mode
+                    "SuperFast PolyBot v3.2\nMode: {}\nStatus: {}\nUptime: {}\nPositions: {}\nSignals: {}\nFollowed wallets: {}\nWS: {}\nRPC: {}\n{}{}",
+                    mode, bot_status, uptime_fmt, open, sigs, wallets, ws, rpc, v2_status, pending_mode
                 )
             ).await?;
         }
@@ -540,6 +547,20 @@ fn fallback_positions_message(metrics: &Metrics) -> String {
     )
 }
 
+fn format_v2_status(metrics: &Metrics, live_disabled_reason: Option<&str>) -> String {
+    let reason = live_disabled_reason
+        .map(|value| format!("\nLive gate: {}", value))
+        .unwrap_or_default();
+    format!(
+        "V2 Simulation\npUSD: ${:.2}\nReserved: ${:.2}\nFees: ${:.2}\nRebates: ${:.2}{}",
+        metrics.virtual_pusd(),
+        metrics.reserved_pusd(),
+        metrics.fees_paid(),
+        metrics.rebates_earned(),
+        reason
+    )
+}
+
 fn format_signals_message(signals: &[SignalLogEntry]) -> String {
     if signals.is_empty() {
         return "Signals:\nNo recent signals".to_string();
@@ -631,6 +652,21 @@ mod tests {
         assert!(output.contains("market-1"));
         assert!(output.contains("conf=8"));
         assert!(output.contains("execute"));
+    }
+
+    #[test]
+    fn v2_status_message_includes_balances_and_gate() {
+        let metrics = Metrics::new();
+        metrics.update_v2_accounting(
+            rust_decimal::Decimal::new(10000, 2),
+            rust_decimal::Decimal::new(2500, 2),
+            rust_decimal::Decimal::new(10, 2),
+            rust_decimal::Decimal::new(5, 2),
+        );
+        let msg = format_v2_status(&metrics, Some("simulation only"));
+        assert!(msg.contains("pUSD: $100.00"));
+        assert!(msg.contains("Reserved: $25.00"));
+        assert!(msg.contains("Live gate: simulation only"));
     }
 
     #[test]
