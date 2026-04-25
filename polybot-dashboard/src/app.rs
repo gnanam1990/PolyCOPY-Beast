@@ -1,8 +1,8 @@
+use crate::data::{self, market_link, HealthData, MetricsData, PositionData, SignalData};
 use leptos::prelude::*;
 use leptos_meta::*;
-use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
-use crate::data::{self, HealthData, MetricsData, PositionData, SignalData, market_link};
+use wasm_bindgen::JsCast;
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -27,10 +27,16 @@ pub fn App() -> impl IntoView {
         let refresh_clone = refresh;
         wasm_bindgen_futures::spawn_local(async move {
             let window = gloo_utils::window();
-            let Ok(host) = window.location().host() else { return; };
-            let Ok(proto) = window.location().protocol() else { return; };
+            let Ok(host) = window.location().host() else {
+                return;
+            };
+            let Ok(proto) = window.location().protocol() else {
+                return;
+            };
             let proto = if proto == "https:" { "wss" } else { "ws" };
-            let Ok(ws) = web_sys::WebSocket::new(&format!("{}://{}/ws", proto, host)) else { return; };
+            let Ok(ws) = web_sys::WebSocket::new(&format!("{}://{}/ws", proto, host)) else {
+                return;
+            };
             let onmessage = Closure::<dyn FnMut(web_sys::MessageEvent)>::new({
                 let refresh = refresh_clone;
                 move |e: web_sys::MessageEvent| {
@@ -63,8 +69,10 @@ pub fn App() -> impl IntoView {
 
     let health_sig = Signal::derive(move || health_res.get().as_deref().cloned().flatten());
     let metrics_sig = Signal::derive(move || metrics_res.get().as_deref().cloned().flatten());
-    let positions_sig = Signal::derive(move || positions_res.get().as_deref().cloned().unwrap_or_default());
-    let signals_sig = Signal::derive(move || signals_res.get().as_deref().cloned().unwrap_or_default());
+    let positions_sig =
+        Signal::derive(move || positions_res.get().as_deref().cloned().unwrap_or_default());
+    let signals_sig =
+        Signal::derive(move || signals_res.get().as_deref().cloned().unwrap_or_default());
 
     view! {
         <Stylesheet id="leptos" href="/style.css"/>
@@ -100,10 +108,19 @@ pub fn App() -> impl IntoView {
 }
 
 #[component]
-fn Sidebar(active_tab: ReadSignal<&'static str>, active_set: WriteSignal<&'static str>) -> impl IntoView {
+fn Sidebar(
+    active_tab: ReadSignal<&'static str>,
+    active_set: WriteSignal<&'static str>,
+) -> impl IntoView {
     let nav_item = |label: &'static str, tab: &'static str, icon: &'static str| {
         let is_active = move || active_tab.get() == tab;
-        let cls = move || if is_active() { "nav-item active" } else { "nav-item" };
+        let cls = move || {
+            if is_active() {
+                "nav-item active"
+            } else {
+                "nav-item"
+            }
+        };
         view! {
             <button class=cls on:click=move |_| active_set.set(tab)>
                 <span class="nav-icon">{icon}</span>
@@ -182,37 +199,66 @@ fn DashboardTab(
         let _ = refresh.get();
         async move { data::fetch_daily_stats().await.unwrap_or_default() }
     });
-    let stats_sig = Signal::derive(move || daily_stats_res.get().as_deref().cloned().unwrap_or_default());
-
-    let pause_action = Action::new_local(move |_: &()| {
-        async move {
-            match gloo_net::http::Request::post("/health/control/pause").send().await {
-                Ok(r) if r.ok() => { set_toast_msg.set("Trading paused.".into()); set_toast_ok.set(true); }
-                _ => { set_toast_msg.set("Pause request failed.".into()); set_toast_ok.set(false); }
-            }
-            refresh.update(|n| *n += 1);
-        }
+    let stats_sig = Signal::derive(move || {
+        daily_stats_res
+            .get()
+            .as_deref()
+            .cloned()
+            .unwrap_or_default()
     });
 
-    let resume_action = Action::new_local(move |_: &()| {
-        async move {
-            match gloo_net::http::Request::post("/health/control/resume").send().await {
-                Ok(r) if r.ok() => { set_toast_msg.set("Trading resumed.".into()); set_toast_ok.set(true); }
-                _ => { set_toast_msg.set("Resume failed — check cooldown.".into()); set_toast_ok.set(false); }
+    let pause_action = Action::new_local(move |_: &()| async move {
+        match gloo_net::http::Request::post("/health/control/pause")
+            .send()
+            .await
+        {
+            Ok(r) if r.ok() => {
+                set_toast_msg.set("Trading paused.".into());
+                set_toast_ok.set(true);
             }
-            refresh.update(|n| *n += 1);
+            _ => {
+                set_toast_msg.set("Pause request failed.".into());
+                set_toast_ok.set(false);
+            }
         }
+        refresh.update(|n| *n += 1);
     });
 
-    let estop_action = Action::new_local(move |_: &()| {
-        async move {
-            if let Ok(true) = gloo_utils::window().confirm_with_message("EMERGENCY STOP: This will flatten all open positions immediately. Are you sure?") {
-                match gloo_net::http::Request::post("/health/control/emergency-stop").send().await {
-                    Ok(r) if r.ok() => { set_toast_msg.set("Emergency Stop executed.".into()); set_toast_ok.set(true); }
-                    _ => { set_toast_msg.set("Emergency Stop failed.".into()); set_toast_ok.set(false); }
+    let resume_action = Action::new_local(move |_: &()| async move {
+        match gloo_net::http::Request::post("/health/control/resume")
+            .send()
+            .await
+        {
+            Ok(r) if r.ok() => {
+                set_toast_msg.set("Trading resumed.".into());
+                set_toast_ok.set(true);
+            }
+            _ => {
+                set_toast_msg.set("Resume failed — check cooldown.".into());
+                set_toast_ok.set(false);
+            }
+        }
+        refresh.update(|n| *n += 1);
+    });
+
+    let estop_action = Action::new_local(move |_: &()| async move {
+        if let Ok(true) = gloo_utils::window().confirm_with_message(
+            "EMERGENCY STOP: This will flatten all open positions immediately. Are you sure?",
+        ) {
+            match gloo_net::http::Request::post("/health/control/emergency-stop")
+                .send()
+                .await
+            {
+                Ok(r) if r.ok() => {
+                    set_toast_msg.set("Emergency Stop executed.".into());
+                    set_toast_ok.set(true);
                 }
-                refresh.update(|n| *n += 1);
+                _ => {
+                    set_toast_msg.set("Emergency Stop failed.".into());
+                    set_toast_ok.set(false);
+                }
             }
+            refresh.update(|n| *n += 1);
         }
     });
 

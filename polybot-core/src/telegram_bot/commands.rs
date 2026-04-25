@@ -79,7 +79,8 @@ fn requested_mode_key() -> &'static str {
 }
 
 fn load_requested_mode_summary() -> Option<String> {
-    let sqlite_path = std::env::var("POLYBOT_SQLITE_PATH").unwrap_or_else(|_| "./polybot.db".to_string());
+    let sqlite_path =
+        std::env::var("POLYBOT_SQLITE_PATH").unwrap_or_else(|_| "./polybot.db".to_string());
     SqliteStore::open(std::path::Path::new(&sqlite_path))
         .ok()
         .and_then(|store| store.get_config(requested_mode_key()).ok().flatten())
@@ -99,8 +100,8 @@ async fn confirm_mode_switch(
             .map_err(|e| format!("Mode switch validation failed: {}", e))?;
     }
 
-    let sqlite_path = std::env::var("POLYBOT_SQLITE_PATH")
-        .unwrap_or_else(|_| "./polybot.db".to_string());
+    let sqlite_path =
+        std::env::var("POLYBOT_SQLITE_PATH").unwrap_or_else(|_| "./polybot.db".to_string());
     let store = SqliteStore::open(std::path::Path::new(&sqlite_path))
         .map_err(|e| format!("Failed to open SQLite for mode switch persistence: {}", e))?;
     store
@@ -191,7 +192,12 @@ pub async fn handle_command(
                 "ACTIVE"
             };
             let pending_mode = load_requested_mode_summary()
-                .map(|mode| format!("\nPending mode switch: {} (restart required)", mode.to_uppercase()))
+                .map(|mode| {
+                    format!(
+                        "\nPending mode switch: {} (restart required)",
+                        mode.to_uppercase()
+                    )
+                })
                 .unwrap_or_default();
 
             bot.send_message(
@@ -205,12 +211,13 @@ pub async fn handle_command(
 
         Command::Positions => {
             let pnl = metrics.daily_pnl_usd();
-            let sqlite_path = std::env::var("POLYBOT_SQLITE_PATH")
-                .unwrap_or_else(|_| "./polybot.db".to_string());
+            let sqlite_path =
+                std::env::var("POLYBOT_SQLITE_PATH").unwrap_or_else(|_| "./polybot.db".to_string());
             let body = match SqliteStore::open(std::path::Path::new(&sqlite_path)) {
                 Ok(store) => match store.list_open_positions() {
                     Ok(rows) if !rows.is_empty() => {
-                        let positions = rows.into_iter().map(|row| row.position).collect::<Vec<_>>();
+                        let positions =
+                            rows.into_iter().map(|row| row.position).collect::<Vec<_>>();
                         format_positions_message(&positions, pnl)
                     }
                     _ => fallback_positions_message(&metrics),
@@ -222,8 +229,8 @@ pub async fn handle_command(
         }
 
         Command::Signals => {
-            let sqlite_path = std::env::var("POLYBOT_SQLITE_PATH")
-                .unwrap_or_else(|_| "./polybot.db".to_string());
+            let sqlite_path =
+                std::env::var("POLYBOT_SQLITE_PATH").unwrap_or_else(|_| "./polybot.db".to_string());
             let body = match SqliteStore::open(std::path::Path::new(&sqlite_path)) {
                 Ok(store) => match store.latest_signals(10) {
                     Ok(signals) => format_signals_message(&signals),
@@ -244,7 +251,9 @@ pub async fn handle_command(
         }
 
         Command::Resume => {
-            if risk_engine.resume_requires_confirmation().await && !confirm_state.has_pending(user_id) {
+            if risk_engine.resume_requires_confirmation().await
+                && !confirm_state.has_pending(user_id)
+            {
                 confirm_state.register(user_id, ConfirmAction::ResumeAfterLoss);
                 bot.send_message(
                     msg.chat.id,
@@ -283,12 +292,10 @@ pub async fn handle_command(
         Command::Confirm => match confirm_state.confirm(user_id) {
             Some(ConfirmAction::EmergencyStop) => {
                 risk_engine.set_emergency_stop(true).await;
-                let closed_positions = state::force_flatten_positions(
-                    metrics.clone(),
-                    position_manager.clone(),
-                )
-                .await
-                .unwrap_or(0);
+                let closed_positions =
+                    state::force_flatten_positions(metrics.clone(), position_manager.clone())
+                        .await
+                        .unwrap_or(0);
                 bot.send_message(
                     msg.chat.id,
                     format!(
@@ -331,7 +338,8 @@ pub async fn handle_command(
 
         Command::Report(period) => match resolve_report_period(period.as_deref()) {
             Ok(period) => {
-                bot.send_message(msg.chat.id, alerts::format_report(&metrics, period)).await?;
+                bot.send_message(msg.chat.id, alerts::format_report(&metrics, period))
+                    .await?;
             }
             Err(message) => {
                 bot.send_message(msg.chat.id, message).await?;
@@ -341,8 +349,11 @@ pub async fn handle_command(
         Command::Wallet(action, address) => {
             let requires_pause = matches!(action.as_str(), "add" | "remove");
             if requires_pause && !risk_engine.is_emergency_stop().await {
-                bot.send_message(msg.chat.id, "Pause trading before changing the followed wallet list.")
-                    .await?;
+                bot.send_message(
+                    msg.chat.id,
+                    "Pause trading before changing the followed wallet list.",
+                )
+                .await?;
                 return Ok(());
             }
 
@@ -352,22 +363,35 @@ pub async fn handle_command(
                         Ok(()) => {
                             let sqlite_path = std::env::var("POLYBOT_SQLITE_PATH")
                                 .unwrap_or_else(|_| "./polybot.db".to_string());
-                            if let Ok(store) = SqliteStore::open(std::path::Path::new(&sqlite_path)) {
-                                let _ = store.upsert_target(address, None, &config.scanner.target_categories, None);
+                            if let Ok(store) = SqliteStore::open(std::path::Path::new(&sqlite_path))
+                            {
+                                let _ = store.upsert_target(
+                                    address,
+                                    None,
+                                    &config.scanner.target_categories,
+                                    None,
+                                );
                             }
-                            bot.send_message(msg.chat.id, format!("Wallet {} added to copy list.", address)).await?;
+                            bot.send_message(
+                                msg.chat.id,
+                                format!("Wallet {} added to copy list.", address),
+                            )
+                            .await?;
                         }
                         Err(e) => {
-                            bot.send_message(msg.chat.id, format!("Wallet add failed: {}", e)).await?;
+                            bot.send_message(msg.chat.id, format!("Wallet add failed: {}", e))
+                                .await?;
                         }
                     },
                     None => {
-                        bot.send_message(msg.chat.id, "Usage: /wallet add <address>").await?;
+                        bot.send_message(msg.chat.id, "Usage: /wallet add <address>")
+                            .await?;
                     }
                 },
                 "remove" => match address {
                     Some(address) => {
-                        confirm_state.register(user_id, ConfirmAction::WalletRemove(address.clone()));
+                        confirm_state
+                            .register(user_id, ConfirmAction::WalletRemove(address.clone()));
                         bot.send_message(
                             msg.chat.id,
                             format!("Removing wallet {} is destructive. Reply /confirm within 60 seconds.", address),
@@ -375,7 +399,8 @@ pub async fn handle_command(
                         .await?;
                     }
                     None => {
-                        bot.send_message(msg.chat.id, "Usage: /wallet remove <address>").await?;
+                        bot.send_message(msg.chat.id, "Usage: /wallet remove <address>")
+                            .await?;
                     }
                 },
                 "list" => {
@@ -397,7 +422,9 @@ pub async fn handle_command(
                                     .into_iter()
                                     .find(|target| target.wallet_address == address.to_lowercase())
                                     .map(|target| format_wallet_score_message(&target))
-                                    .unwrap_or_else(|| format!("No active target record for wallet {}", address)),
+                                    .unwrap_or_else(|| {
+                                        format!("No active target record for wallet {}", address)
+                                    }),
                                 Err(e) => format!("Wallet score lookup failed: {}", e),
                             },
                             Err(e) => format!("Wallet score lookup failed: {}", e),
@@ -405,7 +432,8 @@ pub async fn handle_command(
                         bot.send_message(msg.chat.id, body).await?;
                     }
                     None => {
-                        bot.send_message(msg.chat.id, "Usage: /wallet score <address>").await?;
+                        bot.send_message(msg.chat.id, "Usage: /wallet score <address>")
+                            .await?;
                     }
                 },
                 _ => {
@@ -436,10 +464,12 @@ pub async fn handle_command(
             match risk_engine.update_runtime_config(&key, &value).await {
                 Ok(message) => {
                     let summary = risk_engine.runtime_config_summary().await;
-                    bot.send_message(msg.chat.id, format!("{}\n{}", message, summary)).await?;
+                    bot.send_message(msg.chat.id, format!("{}\n{}", message, summary))
+                        .await?;
                 }
                 Err(e) => {
-                    bot.send_message(msg.chat.id, format!("Config update failed: {}", e)).await?;
+                    bot.send_message(msg.chat.id, format!("Config update failed: {}", e))
+                        .await?;
                 }
             }
         }

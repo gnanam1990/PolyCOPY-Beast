@@ -83,7 +83,11 @@ fn api_path(path: &str) -> String {
 
 pub fn market_link(market_id: &str) -> (String, String) {
     let display = if market_id.len() > 12 {
-        format!("{}...{}", &market_id[..6], &market_id[market_id.len() - 4..])
+        format!(
+            "{}...{}",
+            &market_id[..6],
+            &market_id[market_id.len() - 4..]
+        )
     } else {
         market_id.to_string()
     };

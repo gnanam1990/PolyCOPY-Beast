@@ -25,7 +25,10 @@ use crate::execution::clob_client::ClobClient;
 use crate::metrics::Metrics;
 use crate::telegram_bot::alerts::AlertBroadcaster;
 
-use super::{positions::PositionManager, sqlite::{PersistedPositionRow, SqliteStore}};
+use super::{
+    positions::PositionManager,
+    sqlite::{PersistedPositionRow, SqliteStore},
+};
 
 /// v2.5: Reconciliation engine with light (30s) and full (5min) modes.
 /// Source of truth: remote trading state in live/shadow, SQLite snapshot in simulation.
@@ -150,8 +153,7 @@ impl Reconciler {
         let result = diff_snapshots(&local_positions, &reference.positions);
 
         if apply_snapshot {
-            self.sync_to_reference(&local_positions, &reference)
-                .await?;
+            self.sync_to_reference(&local_positions, &reference).await?;
         }
 
         self.persist_last_reconciliation_at()?;
@@ -168,8 +170,17 @@ impl Reconciler {
             .collect()
     }
 
-    async fn reference_snapshots(&self, apply_snapshot: bool) -> Result<ReferenceSnapshot, PolybotError> {
-        if apply_snapshot && self.config.system.execution_mode.allows_network_market_data() {
+    async fn reference_snapshots(
+        &self,
+        apply_snapshot: bool,
+    ) -> Result<ReferenceSnapshot, PolybotError> {
+        if apply_snapshot
+            && self
+                .config
+                .system
+                .execution_mode
+                .allows_network_market_data()
+        {
             return Ok(ReferenceSnapshot {
                 source: SnapshotSource::RemoteDataApi,
                 positions: self.fetch_remote_positions().await?,
@@ -194,14 +205,17 @@ impl Reconciler {
             let request = polymarket_client_sdk::data::types::request::PositionsRequest::builder()
                 .user(wallet_address)
                 .limit(500)
-                .map_err(|e| PolybotError::State(format!("Invalid reconciliation positions request: {}", e)))?
+                .map_err(|e| {
+                    PolybotError::State(format!("Invalid reconciliation positions request: {}", e))
+                })?
                 .offset(offset)
-                .map_err(|e| PolybotError::State(format!("Invalid reconciliation positions offset: {}", e)))?
+                .map_err(|e| {
+                    PolybotError::State(format!("Invalid reconciliation positions offset: {}", e))
+                })?
                 .build();
-            let positions = client
-                .positions(&request)
-                .await
-                .map_err(|e| PolybotError::State(format!("Failed to fetch remote positions: {}", e)))?;
+            let positions = client.positions(&request).await.map_err(|e| {
+                PolybotError::State(format!("Failed to fetch remote positions: {}", e))
+            })?;
             let batch_size = positions.len();
 
             snapshots.extend(
@@ -222,9 +236,11 @@ impl Reconciler {
 
     fn fetch_sqlite_positions(&self) -> Result<Vec<PositionSnapshot>, PolybotError> {
         let store = self.open_store()?;
-        store
-            .list_open_positions()
-            .map(|rows| rows.into_iter().map(PositionSnapshot::from_persisted_position).collect())
+        store.list_open_positions().map(|rows| {
+            rows.into_iter()
+                .map(PositionSnapshot::from_persisted_position)
+                .collect()
+        })
     }
 
     fn persist_last_reconciliation_at(&self) -> Result<(), PolybotError> {
@@ -310,7 +326,8 @@ impl Reconciler {
             let mut manager = self.position_manager.lock().await;
             manager.restore_positions(restored_positions.clone());
         }
-        self.metrics.set_open_positions(restored_positions.len() as u32);
+        self.metrics
+            .set_open_positions(restored_positions.len() as u32);
 
         for persisted in persisted_by_key.values() {
             if !reference_keys.contains(&persisted.key()) {
@@ -460,7 +477,9 @@ impl PositionSnapshot {
                 .and_then(|entry| entry.opened_at.as_ref().cloned())
                 .unwrap_or_else(chrono::Utc::now),
             status: polybot_common::types::PositionStatus::Open,
-            category: metadata.map(|entry| entry.category).unwrap_or(self.category),
+            category: metadata
+                .map(|entry| entry.category)
+                .unwrap_or(self.category),
         }
     }
 }
@@ -611,19 +630,29 @@ mod tests {
 
     fn test_reconciler(
         position_manager: Arc<Mutex<PositionManager>>,
-    ) -> (Reconciler, Arc<Metrics>, std::path::PathBuf, std::sync::MutexGuard<'static, ()>) {
+    ) -> (
+        Reconciler,
+        Arc<Metrics>,
+        std::path::PathBuf,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
         test_reconciler_with_auto_heal(position_manager, false)
     }
 
     fn test_reconciler_with_auto_heal(
         position_manager: Arc<Mutex<PositionManager>>,
         auto_heal: bool,
-    ) -> (Reconciler, Arc<Metrics>, std::path::PathBuf, std::sync::MutexGuard<'static, ()>) {
-        let guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let sqlite_path = std::env::temp_dir().join(format!(
-            "polybot-reconcile-{}.db",
-            uuid::Uuid::new_v4()
-        ));
+    ) -> (
+        Reconciler,
+        Arc<Metrics>,
+        std::path::PathBuf,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        let guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-reconcile-{}.db", uuid::Uuid::new_v4()));
         std::env::set_var("POLYBOT_SQLITE_PATH", &sqlite_path);
 
         let metrics = Arc::new(Metrics::new());
@@ -730,7 +759,9 @@ mod tests {
         assert!(result.has_issues());
 
         let manager = pm.lock().await;
-        assert!(manager.get_position(&PositionKey::new("market-local", Side::Yes)).is_none());
+        assert!(manager
+            .get_position(&PositionKey::new("market-local", Side::Yes))
+            .is_none());
         let restored = manager
             .get_position(&PositionKey::new("market-remote", Side::No))
             .unwrap();
@@ -738,10 +769,15 @@ mod tests {
         drop(manager);
 
         assert_eq!(
-            metrics.open_positions.load(std::sync::atomic::Ordering::Relaxed),
+            metrics
+                .open_positions
+                .load(std::sync::atomic::Ordering::Relaxed),
             1
         );
-        assert!(store.get_config("last_reconciliation_at").unwrap().is_some());
+        assert!(store
+            .get_config("last_reconciliation_at")
+            .unwrap()
+            .is_some());
 
         let _ = std::fs::remove_file(sqlite_path);
     }
@@ -777,14 +813,18 @@ mod tests {
         .unwrap();
 
         let manager = pm.lock().await;
-        assert!(manager.get_position(&PositionKey::new("market-local", Side::Yes)).is_none());
+        assert!(manager
+            .get_position(&PositionKey::new("market-local", Side::Yes))
+            .is_none());
         assert!(manager
             .get_position(&PositionKey::new("market-remote", Side::No))
             .is_some());
         drop(manager);
 
         assert_eq!(
-            metrics.open_positions.load(std::sync::atomic::Ordering::Relaxed),
+            metrics
+                .open_positions
+                .load(std::sync::atomic::Ordering::Relaxed),
             1
         );
         let _ = std::fs::remove_file(sqlite_path);
@@ -838,15 +878,10 @@ mod tests {
         let pm = Arc::new(Mutex::new(PositionManager::new()));
         {
             let mut manager = pm.lock().await;
-            manager.restore_positions(vec![test_position(
-                "market-local",
-                Side::Yes,
-                dec!(10),
-            )]);
+            manager.restore_positions(vec![test_position("market-local", Side::Yes, dec!(10))]);
         }
 
-        let (r, metrics, sqlite_path, _guard) =
-            test_reconciler_with_auto_heal(pm.clone(), false);
+        let (r, metrics, sqlite_path, _guard) = test_reconciler_with_auto_heal(pm.clone(), false);
         let store = crate::state::sqlite::SqliteStore::open(&sqlite_path).unwrap();
         store
             .upsert_position(
@@ -873,7 +908,9 @@ mod tests {
 
         // Metrics untouched — no set_open_positions call in log-only path.
         assert_eq!(
-            metrics.open_positions.load(std::sync::atomic::Ordering::Relaxed),
+            metrics
+                .open_positions
+                .load(std::sync::atomic::Ordering::Relaxed),
             0
         );
 
@@ -885,15 +922,10 @@ mod tests {
         let pm = Arc::new(Mutex::new(PositionManager::new()));
         {
             let mut manager = pm.lock().await;
-            manager.restore_positions(vec![test_position(
-                "market-local",
-                Side::Yes,
-                dec!(10),
-            )]);
+            manager.restore_positions(vec![test_position("market-local", Side::Yes, dec!(10))]);
         }
 
-        let (r, _metrics, sqlite_path, _guard) =
-            test_reconciler_with_auto_heal(pm.clone(), true);
+        let (r, _metrics, sqlite_path, _guard) = test_reconciler_with_auto_heal(pm.clone(), true);
         let store = crate::state::sqlite::SqliteStore::open(&sqlite_path).unwrap();
         store
             .upsert_position(

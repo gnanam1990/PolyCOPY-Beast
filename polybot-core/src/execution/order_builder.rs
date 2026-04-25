@@ -27,7 +27,8 @@ pub fn build_order(
 ) -> Order {
     let order_type = select_order_type(decision);
     let price = align_to_tick_size(target_price, market_context.tick_size);
-    let (size, normalized_size_usd) = if let Some(target_size_tokens) = decision.target_size_tokens {
+    let (size, normalized_size_usd) = if let Some(target_size_tokens) = decision.target_size_tokens
+    {
         let size = target_size_tokens.round_dp(2).max(Decimal::ZERO);
         (size, (size * price).round_dp(2))
     } else {
@@ -323,8 +324,7 @@ mod tests {
 
     #[test]
     fn buy_fok_plan_applies_upward_price_buffer() {
-        let decision =
-            test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Buy);
+        let decision = test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Buy);
         let ctx = test_market_context();
         let order = build_order_with_price_buffer(
             &decision,
@@ -340,8 +340,7 @@ mod tests {
 
     #[test]
     fn sell_fok_plan_applies_reverse_price_buffer() {
-        let decision =
-            test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Sell);
+        let decision = test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Sell);
         let ctx = test_market_context();
         let order = build_order_with_price_buffer(
             &decision,
@@ -358,13 +357,11 @@ mod tests {
     #[test]
     fn build_order_propagates_direction() {
         let ctx = test_market_context();
-        let buy =
-            test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Buy);
+        let buy = test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Buy);
         let buy_order = build_order(&buy, &ctx, dec!(0.50), dec!(50));
         assert_eq!(buy_order.direction, TradeDirection::Buy);
 
-        let sell =
-            test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Sell);
+        let sell = test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Sell);
         let sell_order = build_order(&sell, &ctx, dec!(0.50), dec!(50));
         assert_eq!(sell_order.direction, TradeDirection::Sell);
     }
@@ -372,8 +369,7 @@ mod tests {
     #[test]
     fn simulated_trade_carries_direction() {
         let ctx = test_market_context();
-        let decision =
-            test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Sell);
+        let decision = test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Sell);
         let order = build_order(&decision, &ctx, dec!(0.50), dec!(50));
         let trade = create_simulated_trade(&decision, &order);
         assert_eq!(trade.direction, TradeDirection::Sell);

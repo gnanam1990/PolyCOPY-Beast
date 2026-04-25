@@ -39,10 +39,7 @@ pub fn validate_address(address: &str) -> Result<(), PolybotError> {
     }
 }
 
-pub fn signing_payload_json(
-    domain: &Eip712DomainV2,
-    order: &V2OrderPayload,
-) -> serde_json::Value {
+pub fn signing_payload_json(domain: &Eip712DomainV2, order: &V2OrderPayload) -> serde_json::Value {
     serde_json::json!({
         "domain": domain,
         "primaryType": "Order",
@@ -84,9 +81,10 @@ mod tests {
 
     #[test]
     fn signing_payload_contains_builder_and_timestamp() {
-        let builder =
-            parse_builder_code("0x00000000000000000000000000000000000000000000000000000000deadbeef")
-                .unwrap();
+        let builder = parse_builder_code(
+            "0x00000000000000000000000000000000000000000000000000000000deadbeef",
+        )
+        .unwrap();
         let order = V2OrderPayload {
             salt: 42,
             maker: "0x0000000000000000000000000000000000000001".to_string(),

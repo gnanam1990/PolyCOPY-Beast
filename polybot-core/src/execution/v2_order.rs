@@ -63,9 +63,8 @@ pub fn parse_builder_code(raw: &str) -> Result<BuilderCode, PolybotError> {
 }
 
 fn decode_hex_byte(raw: &str) -> Result<u8, PolybotError> {
-    u8::from_str_radix(raw, 16).map_err(|_| {
-        PolybotError::Config(format!("BUILDER_CODE contains non-hex byte '{}'", raw))
-    })
+    u8::from_str_radix(raw, 16)
+        .map_err(|_| PolybotError::Config(format!("BUILDER_CODE contains non-hex byte '{}'", raw)))
 }
 
 pub fn current_timestamp_ms() -> u64 {
@@ -114,7 +113,10 @@ mod tests {
     fn builder_code_serializes_as_hex_string() {
         let raw = "0x00000000000000000000000000000000000000000000000000000000deadbeef";
         let parsed = parse_builder_code(raw).unwrap();
-        assert_eq!(serde_json::to_value(parsed).unwrap(), serde_json::json!(raw));
+        assert_eq!(
+            serde_json::to_value(parsed).unwrap(),
+            serde_json::json!(raw)
+        );
     }
 
     #[test]

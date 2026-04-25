@@ -166,7 +166,6 @@ pub struct TelegramConfig {
     pub emergency_stop_limit_per_hour: u32,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardConfig {
     pub host: String,
@@ -671,13 +670,22 @@ mod tests {
     fn relayer_config_parses_from_env() {
         std::env::set_var("RELAYER_URL", "https://relayer-v2.polymarket.com");
         std::env::set_var("RELAYER_API_KEY", "test-api-key");
-        std::env::set_var("RELAYER_API_KEY_ADDRESS", "0x1234567890123456789012345678901234567890");
+        std::env::set_var(
+            "RELAYER_API_KEY_ADDRESS",
+            "0x1234567890123456789012345678901234567890",
+        );
         let mut config = AppConfig::default();
         config.apply_env_overrides();
-        let relayer = config.relayer.as_ref().expect("relayer should be populated");
+        let relayer = config
+            .relayer
+            .as_ref()
+            .expect("relayer should be populated");
         assert_eq!(relayer.url, "https://relayer-v2.polymarket.com");
         assert_eq!(relayer.api_key, "test-api-key");
-        assert_eq!(relayer.api_key_address, "0x1234567890123456789012345678901234567890");
+        assert_eq!(
+            relayer.api_key_address,
+            "0x1234567890123456789012345678901234567890"
+        );
         std::env::remove_var("RELAYER_URL");
         std::env::remove_var("RELAYER_API_KEY");
         std::env::remove_var("RELAYER_API_KEY_ADDRESS");
@@ -691,8 +699,11 @@ mod tests {
         std::env::remove_var("RELAYER_API_KEY_ADDRESS");
         let mut config = AppConfig::default();
         config.apply_env_overrides();
-        assert!(config.relayer.is_none(),
-            "partial relayer config should be None, got {:?}", config.relayer);
+        assert!(
+            config.relayer.is_none(),
+            "partial relayer config should be None, got {:?}",
+            config.relayer
+        );
         std::env::remove_var("RELAYER_URL");
     }
 
@@ -710,12 +721,24 @@ mod tests {
     #[test]
     #[serial]
     fn collateral_config_applies_env_overrides() {
-        std::env::set_var("COLLATERAL_ONRAMP_ADDRESS", "0xabcdef0000000000000000000000000000000000");
-        std::env::set_var("USDC_E_ADDRESS", "0x1111111111111111111111111111111111111111");
+        std::env::set_var(
+            "COLLATERAL_ONRAMP_ADDRESS",
+            "0xabcdef0000000000000000000000000000000000",
+        );
+        std::env::set_var(
+            "USDC_E_ADDRESS",
+            "0x1111111111111111111111111111111111111111",
+        );
         let mut config = AppConfig::default();
         config.apply_env_overrides();
-        assert_eq!(config.collateral.onramp_address, "0xabcdef0000000000000000000000000000000000");
-        assert_eq!(config.collateral.usdc_e_address, "0x1111111111111111111111111111111111111111");
+        assert_eq!(
+            config.collateral.onramp_address,
+            "0xabcdef0000000000000000000000000000000000"
+        );
+        assert_eq!(
+            config.collateral.usdc_e_address,
+            "0x1111111111111111111111111111111111111111"
+        );
         std::env::remove_var("COLLATERAL_ONRAMP_ADDRESS");
         std::env::remove_var("USDC_E_ADDRESS");
     }
@@ -733,7 +756,10 @@ mod tests {
         std::env::set_var("BUILDER_CODE", code);
         let mut config = AppConfig::default();
         config.apply_env_overrides();
-        let builder = config.builder.as_ref().expect("builder should be populated");
+        let builder = config
+            .builder
+            .as_ref()
+            .expect("builder should be populated");
         assert_eq!(builder.code, code);
         std::env::remove_var("BUILDER_CODE");
     }
@@ -757,10 +783,22 @@ mod tests {
     #[test]
     fn category_caps_default_to_prd_values() {
         let config = AppConfig::default();
-        assert_eq!(config.risk.max_position_politics_usdc, rust_decimal_macros::dec!(250));
-        assert_eq!(config.risk.max_position_crypto_usdc, rust_decimal_macros::dec!(150));
-        assert_eq!(config.risk.max_position_sports_usdc, rust_decimal_macros::dec!(200));
-        assert_eq!(config.risk.max_position_other_usdc, rust_decimal_macros::dec!(100));
+        assert_eq!(
+            config.risk.max_position_politics_usdc,
+            rust_decimal_macros::dec!(250)
+        );
+        assert_eq!(
+            config.risk.max_position_crypto_usdc,
+            rust_decimal_macros::dec!(150)
+        );
+        assert_eq!(
+            config.risk.max_position_sports_usdc,
+            rust_decimal_macros::dec!(200)
+        );
+        assert_eq!(
+            config.risk.max_position_other_usdc,
+            rust_decimal_macros::dec!(100)
+        );
     }
 
     #[test]
@@ -770,11 +808,23 @@ mod tests {
         std::env::set_var("MAX_POSITION_CRYPTO_USDC", "300");
         let mut config = AppConfig::default();
         config.apply_env_overrides();
-        assert_eq!(config.risk.max_position_politics_usdc, rust_decimal_macros::dec!(500));
-        assert_eq!(config.risk.max_position_crypto_usdc, rust_decimal_macros::dec!(300));
+        assert_eq!(
+            config.risk.max_position_politics_usdc,
+            rust_decimal_macros::dec!(500)
+        );
+        assert_eq!(
+            config.risk.max_position_crypto_usdc,
+            rust_decimal_macros::dec!(300)
+        );
         // Unchanged defaults for the others.
-        assert_eq!(config.risk.max_position_sports_usdc, rust_decimal_macros::dec!(200));
-        assert_eq!(config.risk.max_position_other_usdc, rust_decimal_macros::dec!(100));
+        assert_eq!(
+            config.risk.max_position_sports_usdc,
+            rust_decimal_macros::dec!(200)
+        );
+        assert_eq!(
+            config.risk.max_position_other_usdc,
+            rust_decimal_macros::dec!(100)
+        );
         std::env::remove_var("MAX_POSITION_POLITICS_USDC");
         std::env::remove_var("MAX_POSITION_CRYPTO_USDC");
     }

@@ -18,10 +18,7 @@ impl StartupPreflightReport {
                 "mode={:?} wallet_mode={} approvals_ready={}",
                 self.execution_mode, wallet_mode, approvals_ready
             ),
-            _ => format!(
-                "mode={:?} simulation_preflight=true",
-                self.execution_mode
-            ),
+            _ => format!("mode={:?} simulation_preflight=true", self.execution_mode),
         }
     }
 }
