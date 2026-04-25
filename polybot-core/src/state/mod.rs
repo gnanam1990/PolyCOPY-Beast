@@ -2,6 +2,7 @@ pub mod copied_lots;
 pub mod migrations;
 pub mod pnl;
 pub mod positions;
+pub mod pusd;
 pub mod reconciliation;
 pub mod sqlite;
 
@@ -48,19 +49,21 @@ fn update_daily_stats(
     unrealized: Decimal,
 ) -> Result<(), PolybotError> {
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let mut stats = store.get_daily_stats(&date)?.unwrap_or(sqlite::DailyStatsRow {
-        date: date.clone(),
-        starting_balance: initial_starting_balance(config),
-        realized_pnl: Decimal::ZERO,
-        unrealized_pnl: Decimal::ZERO,
-        volume_traded: Decimal::ZERO,
-        trades_placed: 0,
-        trades_filled: 0,
-        trades_rejected: 0,
-        drawdown_pct: Decimal::ZERO,
-        paused_at: None,
-        notes: None,
-    });
+    let mut stats = store
+        .get_daily_stats(&date)?
+        .unwrap_or(sqlite::DailyStatsRow {
+            date: date.clone(),
+            starting_balance: initial_starting_balance(config),
+            realized_pnl: Decimal::ZERO,
+            unrealized_pnl: Decimal::ZERO,
+            volume_traded: Decimal::ZERO,
+            trades_placed: 0,
+            trades_filled: 0,
+            trades_rejected: 0,
+            drawdown_pct: Decimal::ZERO,
+            paused_at: None,
+            notes: None,
+        });
 
     stats.unrealized_pnl = unrealized;
     stats.volume_traded += trade.size_usd;
@@ -106,10 +109,14 @@ fn copied_lot_from_row(row: sqlite::CopiedLotRow) -> Result<copied_lots::CopiedL
         average_price: row.average_price,
         opened_at: DateTime::parse_from_rfc3339(&row.opened_at)
             .map(|value| value.with_timezone(&Utc))
-            .map_err(|error| PolybotError::State(format!("Invalid copied lot opened_at: {}", error)))?,
+            .map_err(|error| {
+                PolybotError::State(format!("Invalid copied lot opened_at: {}", error))
+            })?,
         updated_at: DateTime::parse_from_rfc3339(&row.updated_at)
             .map(|value| value.with_timezone(&Utc))
-            .map_err(|error| PolybotError::State(format!("Invalid copied lot updated_at: {}", error)))?,
+            .map_err(|error| {
+                PolybotError::State(format!("Invalid copied lot updated_at: {}", error))
+            })?,
         last_signal_id: row.last_signal_id,
         last_tx_hash: row.last_tx_hash,
     })
@@ -151,7 +158,10 @@ fn update_copied_lot_from_trade(
     trade: &Trade,
 ) -> Result<(), PolybotError> {
     if trade.simulated
-        || !matches!(trade.status, TradeStatus::Filled | TradeStatus::PartiallyFilled)
+        || !matches!(
+            trade.status,
+            TradeStatus::Filled | TradeStatus::PartiallyFilled
+        )
         || trade.filled_size <= Decimal::ZERO
     {
         return Ok(());
@@ -159,7 +169,9 @@ fn update_copied_lot_from_trade(
 
     let side_key = copied_lot_side_key(trade.side);
     let next_lot = match store.get_copied_lot(&trade.source_wallet, &trade.market_id, side_key)? {
-        Some(row) => copied_lot_from_row(row)?.apply_fill(trade.direction, trade.filled_size, trade.price)?,
+        Some(row) => {
+            copied_lot_from_row(row)?.apply_fill(trade.direction, trade.filled_size, trade.price)?
+        }
         None if matches!(trade.direction, polybot_common::types::TradeDirection::Buy) => {
             Some(copied_lot_from_trade(trade))
         }
@@ -186,7 +198,9 @@ pub async fn force_flatten_positions(
 
     metrics.set_open_positions(0);
     for _ in 0..closed_positions.len() {
-        metrics.total_positions_closed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        metrics
+            .total_positions_closed
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     Ok(closed_positions.len())
@@ -199,13 +213,21 @@ pub async fn run_state_manager(
     market_prices: Arc<RwLock<HashMap<String, Decimal>>>,
     receiver: mpsc::Receiver<Trade>,
 ) -> Result<(), PolybotError> {
-    let sqlite_path = std::env::var("POLYBOT_SQLITE_PATH")
-        .unwrap_or_else(|_| "./polybot.db".to_string());
+    let sqlite_path =
+        std::env::var("POLYBOT_SQLITE_PATH").unwrap_or_else(|_| "./polybot.db".to_string());
     let sqlite_path = sqlite::SqliteStore::open(std::path::Path::new(&sqlite_path))
         .map(|_| sqlite_path)
         .ok();
 
-    run_in_memory(receiver, metrics, position_manager, market_prices, sqlite_path.as_deref(), &config).await
+    run_in_memory(
+        receiver,
+        metrics,
+        position_manager,
+        market_prices,
+        sqlite_path.as_deref(),
+        &config,
+    )
+    .await
 }
 
 async fn run_in_memory(
@@ -232,11 +254,14 @@ async fn run_in_memory(
                         tracing::error!(error = %e, "Failed to persist trade to SQLite");
                     }
                 }
-                Err(e) => tracing::error!(error = %e, "Failed to open SQLite for trade persistence"),
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to open SQLite for trade persistence")
+                }
             }
         }
 
-        let sqlite_store = sqlite_path.and_then(|path| sqlite::SqliteStore::open(std::path::Path::new(path)).ok());
+        let sqlite_store =
+            sqlite_path.and_then(|path| sqlite::SqliteStore::open(std::path::Path::new(path)).ok());
 
         if let Some(store) = sqlite_store.as_ref() {
             if let Err(e) = update_copied_lot_from_trade(store, &trade) {
@@ -270,21 +295,26 @@ async fn run_in_memory(
                         None
                     }
                 };
-                if let Err(e) = store.upsert_position(pos, current_price, Some(unrealized), owner.as_deref()) {
+                if let Err(e) =
+                    store.upsert_position(pos, current_price, Some(unrealized), owner.as_deref())
+                {
                     tracing::error!(error = %e, "Failed to persist position to SQLite");
                 }
             } else {
                 match store.list_open_positions() {
                     Ok(rows) => {
                         for row in rows.into_iter().filter(|row| {
-                            row.position.market_id == trade.market_id && row.position.side == trade.side
+                            row.position.market_id == trade.market_id
+                                && row.position.side == trade.side
                         }) {
                             if let Err(e) = store.remove_position(&row.position.id) {
                                 tracing::error!(error = %e, position_id = %row.position.id, "Failed to remove closed SQLite position");
                             }
                         }
                     }
-                    Err(e) => tracing::error!(error = %e, "Failed to load SQLite positions for removal"),
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to load SQLite positions for removal")
+                    }
                 }
             }
 
@@ -305,8 +335,8 @@ async fn run_in_memory(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
     use crate::state::sqlite::CopiedLotRow;
+    use chrono::Utc;
     use polybot_common::types::{Category, OrderType, Side, TradeDirection};
     use rust_decimal_macros::dec;
 
@@ -368,7 +398,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(closed, 2);
-        assert_eq!(metrics.open_positions.load(std::sync::atomic::Ordering::Relaxed), 0);
+        assert_eq!(
+            metrics
+                .open_positions
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
         assert_eq!(
             metrics
                 .total_positions_closed
@@ -393,7 +428,12 @@ mod tests {
             category: Category::Politics,
         };
         store
-            .upsert_position(&position, Some(Decimal::new(65, 2)), Some(Decimal::new(5, 0)), Some("0xabc"))
+            .upsert_position(
+                &position,
+                Some(Decimal::new(65, 2)),
+                Some(Decimal::new(5, 0)),
+                Some("0xabc"),
+            )
             .unwrap();
 
         let metrics = Arc::new(Metrics::new());
@@ -404,35 +444,48 @@ mod tests {
             .unwrap();
 
         assert_eq!(position_manager.lock().await.open_position_count(), 1);
-        assert_eq!(metrics.open_positions.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(
+            metrics
+                .open_positions
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
     }
 
     #[tokio::test]
     async fn run_in_memory_persists_positions_and_daily_stats_to_sqlite() {
-        let sqlite_path = std::env::temp_dir().join(format!("polybot-state-{}.db", uuid::Uuid::new_v4()));
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-state-{}.db", uuid::Uuid::new_v4()));
         std::env::set_var("POLYBOT_SQLITE_PATH", &sqlite_path);
 
         let store = sqlite::SqliteStore::open(&sqlite_path).unwrap();
         let timestamp = Utc::now().to_rfc3339();
-        store.insert_signal_log(&sqlite::SignalLogInsert {
-            signal_id: "signal-1",
-            timestamp: &timestamp,
-            wallet_address: "0xabc123abc123abc123abc123abc123abc123abc1",
-            market_id: "m1",
-            confidence: 7,
-            secret_level: 7,
-            category: "politics",
-            side: "YES",
-            disposition: "execute",
-        }).unwrap();
+        store
+            .insert_signal_log(&sqlite::SignalLogInsert {
+                signal_id: "signal-1",
+                timestamp: &timestamp,
+                wallet_address: "0xabc123abc123abc123abc123abc123abc123abc1",
+                market_id: "m1",
+                confidence: 7,
+                secret_level: 7,
+                category: "politics",
+                side: "YES",
+                disposition: "execute",
+            })
+            .unwrap();
 
         let metrics = Arc::new(Metrics::new());
         let position_manager = Arc::new(Mutex::new(positions::PositionManager::new()));
-        let market_prices = Arc::new(RwLock::new(HashMap::from([("m1".to_string(), Decimal::new(70, 2))])));
+        let market_prices = Arc::new(RwLock::new(HashMap::from([(
+            "m1".to_string(),
+            Decimal::new(70, 2),
+        )])));
         let (tx, rx) = mpsc::channel(4);
         let config = AppConfig::default();
 
-        tx.send(test_trade("m1", Side::Yes, Category::Politics)).await.unwrap();
+        tx.send(test_trade("m1", Side::Yes, Category::Politics))
+            .await
+            .unwrap();
         drop(tx);
 
         run_in_memory(
@@ -443,13 +496,16 @@ mod tests {
             Some(sqlite_path.to_string_lossy().as_ref()),
             &config,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
 
         let reopened = sqlite::SqliteStore::open(&sqlite_path).unwrap();
         let positions = reopened.list_open_positions().unwrap();
         assert_eq!(positions.len(), 1);
-        assert_eq!(positions[0].owned_by_wallet.as_deref(), Some("0xabc123abc123abc123abc123abc123abc123abc1"));
+        assert_eq!(
+            positions[0].owned_by_wallet.as_deref(),
+            Some("0xabc123abc123abc123abc123abc123abc123abc1")
+        );
 
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let stats = reopened.get_daily_stats(&today).unwrap().unwrap();
@@ -463,7 +519,8 @@ mod tests {
 
     #[tokio::test]
     async fn run_in_memory_removes_persisted_open_row_when_sell_fully_exits() {
-        let sqlite_path = std::env::temp_dir().join(format!("polybot-state-{}.db", uuid::Uuid::new_v4()));
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-state-{}.db", uuid::Uuid::new_v4()));
         std::env::set_var("POLYBOT_SQLITE_PATH", &sqlite_path);
 
         let store = sqlite::SqliteStore::open(&sqlite_path).unwrap();
@@ -479,7 +536,12 @@ mod tests {
             category: Category::Politics,
         };
         store
-            .upsert_position(&position, Some(Decimal::new(50, 2)), Some(Decimal::ZERO), Some("0xabc123abc123abc123abc123abc123abc123abc1"))
+            .upsert_position(
+                &position,
+                Some(Decimal::new(50, 2)),
+                Some(Decimal::ZERO),
+                Some("0xabc123abc123abc123abc123abc123abc123abc1"),
+            )
             .unwrap();
 
         let metrics = Arc::new(Metrics::new());
@@ -525,7 +587,8 @@ mod tests {
 
     #[tokio::test]
     async fn partial_sell_fill_reduces_lot_without_retrying() {
-        let sqlite_path = std::env::temp_dir().join(format!("polybot-state-{}.db", uuid::Uuid::new_v4()));
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-state-{}.db", uuid::Uuid::new_v4()));
         std::env::set_var("POLYBOT_SQLITE_PATH", &sqlite_path);
 
         let store = sqlite::SqliteStore::open(&sqlite_path).unwrap();
@@ -550,7 +613,8 @@ mod tests {
         let (tx, rx) = mpsc::channel(4);
         let config = AppConfig::default();
 
-        let mut trade = test_trade_with_direction("m1", Side::Yes, Category::Politics, TradeDirection::Sell);
+        let mut trade =
+            test_trade_with_direction("m1", Side::Yes, Category::Politics, TradeDirection::Sell);
         trade.size = dec!(10);
         trade.filled_size = dec!(3);
         trade.size_usd = dec!(1.5);
@@ -573,11 +637,7 @@ mod tests {
 
         let reopened = sqlite::SqliteStore::open(&sqlite_path).unwrap();
         let copied_lot = reopened
-            .get_copied_lot(
-                "0xabc123abc123abc123abc123abc123abc123abc1",
-                "m1",
-                "YES",
-            )
+            .get_copied_lot("0xabc123abc123abc123abc123abc123abc123abc1", "m1", "YES")
             .unwrap()
             .unwrap();
         assert_eq!(copied_lot.current_size, dec!(7));
@@ -592,7 +652,8 @@ mod tests {
 
     #[tokio::test]
     async fn simulated_filled_trade_does_not_mutate_copied_lots() {
-        let sqlite_path = std::env::temp_dir().join(format!("polybot-state-{}.db", uuid::Uuid::new_v4()));
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-state-{}.db", uuid::Uuid::new_v4()));
         std::env::set_var("POLYBOT_SQLITE_PATH", &sqlite_path);
 
         let metrics = Arc::new(Metrics::new());
@@ -619,11 +680,7 @@ mod tests {
 
         let reopened = sqlite::SqliteStore::open(&sqlite_path).unwrap();
         let copied_lot = reopened
-            .get_copied_lot(
-                "0xabc123abc123abc123abc123abc123abc123abc1",
-                "m1",
-                "YES",
-            )
+            .get_copied_lot("0xabc123abc123abc123abc123abc123abc123abc1", "m1", "YES")
             .unwrap();
         assert!(copied_lot.is_none());
 
