@@ -35,6 +35,10 @@ pub async fn cancel_open_orders_on_shutdown(config: Arc<AppConfig>) -> Result<()
     client.cancel_all_orders().await
 }
 
+fn simulation_transaction_id(signal_id: &str) -> String {
+    format!("sim-{}", signal_id)
+}
+
 pub async fn run_execution_engine(
     config: Arc<AppConfig>,
     metrics: Arc<Metrics>,
@@ -274,7 +278,21 @@ pub async fn run_execution_engine(
                             signal_id = %decision.signal_id,
                             "Simulation mode: creating simulated trade"
                         );
-                        let trade = order_builder::create_simulated_trade(&decision, &order);
+                        let outcome = v2_flow::simulate_with_relayer(
+                            &order,
+                            v2_sim::SimulatedRelayer::success(simulation_transaction_id(
+                                &decision.signal_id,
+                            )),
+                        )?;
+                        let trade = outcome.trade;
+                        metrics.broadcast_event(
+                            "relayer_update",
+                            serde_json::json!({
+                                "transaction_id": outcome.transaction.transaction_id,
+                                "state": outcome.transaction.state.as_sqlite_str(),
+                                "mode": "simulation",
+                            }),
+                        );
                         metrics.record_trade(true);
                         metrics.broadcast_event(
                             "trade_placed",
@@ -430,5 +448,10 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn simulation_transaction_id_is_stable_for_signal() {
+        assert_eq!(super::simulation_transaction_id("abc"), "sim-abc");
     }
 }
