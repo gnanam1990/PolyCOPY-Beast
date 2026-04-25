@@ -23,6 +23,12 @@ impl StartupPreflightReport {
     }
 }
 
+fn live_v2_enabled() -> bool {
+    std::env::var("POLYBOT_ENABLE_LIVE_V2")
+        .map(|value| value == "true" || value == "1")
+        .unwrap_or(false)
+}
+
 pub async fn run_startup_preflight(
     config: &AppConfig,
 ) -> Result<StartupPreflightReport, PolybotError> {
@@ -32,6 +38,12 @@ pub async fn run_startup_preflight(
             wallet_mode: None,
             approvals_ready: None,
         });
+    }
+
+    if matches!(config.system.execution_mode, ExecutionMode::Live) && !live_v2_enabled() {
+        return Err(PolybotError::Config(
+            "Live CLOB V2 submission is disabled for the simulation-complete milestone. Set POLYBOT_ENABLE_LIVE_V2=true only after V2 endpoint verification, pUSD wrap/approve/redeem support, dashboard control auth, and full workspace tests are green.".to_string(),
+        ));
     }
 
     let mut report = StartupPreflightReport {
@@ -63,4 +75,26 @@ pub async fn run_startup_preflight(
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn live_v2_gate_defaults_to_disabled() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::remove_var("POLYBOT_ENABLE_LIVE_V2");
+        assert!(!super::live_v2_enabled());
+    }
+
+    #[test]
+    fn live_v2_gate_accepts_true() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::set_var("POLYBOT_ENABLE_LIVE_V2", "true");
+        assert!(super::live_v2_enabled());
+        std::env::remove_var("POLYBOT_ENABLE_LIVE_V2");
+    }
+}
