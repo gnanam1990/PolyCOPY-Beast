@@ -1,10 +1,10 @@
 # SuperFast PolyBot v3.2 — CLOB V2 Edition
 
-**Project Name:** SuperFast PolyBot v3.2  
-**Edition:** CLOB V2 / Solo Developer / Windows Native / Gasless  
-**Date:** April 24, 2026  
-**Status:** Final — Pre-Launch (V2 Go-Live: April 28, 2026)  
-**Target:** Windows Native + Sustainable Copy Trading on Polymarket CLOB V2  
+**Project Name:** SuperFast PolyBot v3.2
+**Edition:** CLOB V2 / Solo Developer / Windows Native / Gasless
+**Date:** April 24, 2026
+**Status:** Final — Pre-Launch (V2 Go-Live: April 28, 2026)
+**Target:** Windows Native + Sustainable Copy Trading on Polymarket CLOB V2
 
 ---
 
