@@ -76,25 +76,52 @@ pub async fn run_startup_preflight(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, OnceLock};
+    use serial_test::serial;
 
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn new(key: &'static str) -> Self {
+            Self {
+                key,
+                original: std::env::var(key).ok(),
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.original.as_ref() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
     }
 
     #[test]
+    #[serial]
     fn live_v2_gate_defaults_to_disabled() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = EnvVarGuard::new("POLYBOT_ENABLE_LIVE_V2");
         std::env::remove_var("POLYBOT_ENABLE_LIVE_V2");
         assert!(!super::live_v2_enabled());
     }
 
     #[test]
+    #[serial]
     fn live_v2_gate_accepts_true() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = EnvVarGuard::new("POLYBOT_ENABLE_LIVE_V2");
         std::env::set_var("POLYBOT_ENABLE_LIVE_V2", "true");
         assert!(super::live_v2_enabled());
-        std::env::remove_var("POLYBOT_ENABLE_LIVE_V2");
+    }
+
+    #[test]
+    #[serial]
+    fn live_v2_gate_accepts_one() {
+        let _guard = EnvVarGuard::new("POLYBOT_ENABLE_LIVE_V2");
+        std::env::set_var("POLYBOT_ENABLE_LIVE_V2", "1");
+        assert!(super::live_v2_enabled());
     }
 }
