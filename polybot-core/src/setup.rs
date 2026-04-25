@@ -29,6 +29,12 @@ fn live_v2_enabled() -> bool {
         .unwrap_or(false)
 }
 
+fn dashboard_control_auth_configured() -> bool {
+    std::env::var("POLYBOT_DASHBOARD_CONTROL_KEY")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
 pub async fn run_startup_preflight(
     config: &AppConfig,
 ) -> Result<StartupPreflightReport, PolybotError> {
@@ -43,6 +49,14 @@ pub async fn run_startup_preflight(
     if matches!(config.system.execution_mode, ExecutionMode::Live) && !live_v2_enabled() {
         return Err(PolybotError::Config(
             "Live CLOB V2 submission is disabled for the simulation-complete milestone. Set POLYBOT_ENABLE_LIVE_V2=true only after V2 endpoint verification, pUSD wrap/approve/redeem support, dashboard control auth, and full workspace tests are green.".to_string(),
+        ));
+    }
+
+    if matches!(config.system.execution_mode, ExecutionMode::Live)
+        && !dashboard_control_auth_configured()
+    {
+        return Err(PolybotError::Config(
+            "Live mode requires POLYBOT_DASHBOARD_CONTROL_KEY so dashboard pause/resume/emergency-stop routes are authenticated.".to_string(),
         ));
     }
 
@@ -123,5 +137,19 @@ mod tests {
         let _guard = EnvVarGuard::new("POLYBOT_ENABLE_LIVE_V2");
         std::env::set_var("POLYBOT_ENABLE_LIVE_V2", "1");
         assert!(super::live_v2_enabled());
+    }
+
+    #[test]
+    #[serial]
+    fn dashboard_control_auth_requires_non_empty_key() {
+        let _guard = EnvVarGuard::new("POLYBOT_DASHBOARD_CONTROL_KEY");
+        std::env::remove_var("POLYBOT_DASHBOARD_CONTROL_KEY");
+        assert!(!super::dashboard_control_auth_configured());
+
+        std::env::set_var("POLYBOT_DASHBOARD_CONTROL_KEY", "   ");
+        assert!(!super::dashboard_control_auth_configured());
+
+        std::env::set_var("POLYBOT_DASHBOARD_CONTROL_KEY", "test-control-key");
+        assert!(super::dashboard_control_auth_configured());
     }
 }

@@ -6,6 +6,52 @@ use leptos_meta::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
+const CONTROL_KEY_STORAGE: &str = "polybot_control_key";
+const CONTROL_KEY_HEADER: &str = "X-PolyBot-Control-Key";
+
+fn stored_control_key() -> Option<String> {
+    gloo_utils::window()
+        .local_storage()
+        .ok()
+        .flatten()
+        .and_then(|storage| storage.get_item(CONTROL_KEY_STORAGE).ok().flatten())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn prompt_for_control_key() -> Option<String> {
+    if let Some(key) = stored_control_key() {
+        return Some(key);
+    }
+
+    let key = gloo_utils::window()
+        .prompt_with_message("Enter dashboard control key")
+        .ok()
+        .flatten()?
+        .trim()
+        .to_string();
+    if key.is_empty() {
+        return None;
+    }
+
+    if let Ok(Some(storage)) = gloo_utils::window().local_storage() {
+        let _ = storage.set_item(CONTROL_KEY_STORAGE, &key);
+    }
+    Some(key)
+}
+
+async fn post_control(path: &str) -> Result<gloo_net::http::Response, String> {
+    let Some(key) = prompt_for_control_key() else {
+        return Err("Dashboard control key required.".to_string());
+    };
+
+    gloo_net::http::Request::post(path)
+        .header(CONTROL_KEY_HEADER, &key)
+        .send()
+        .await
+        .map_err(|e| format!("Control request failed: {}", e))
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     provide_meta_context();
@@ -223,10 +269,7 @@ fn DashboardTab(
     });
 
     let pause_action = Action::new_local(move |_: &()| async move {
-        match gloo_net::http::Request::post("/health/control/pause")
-            .send()
-            .await
-        {
+        match post_control("/health/control/pause").await {
             Ok(r) if r.ok() => {
                 set_toast_msg.set("Trading paused.".into());
                 set_toast_ok.set(true);
@@ -240,10 +283,7 @@ fn DashboardTab(
     });
 
     let resume_action = Action::new_local(move |_: &()| async move {
-        match gloo_net::http::Request::post("/health/control/resume")
-            .send()
-            .await
-        {
+        match post_control("/health/control/resume").await {
             Ok(r) if r.ok() => {
                 set_toast_msg.set("Trading resumed.".into());
                 set_toast_ok.set(true);
@@ -260,10 +300,7 @@ fn DashboardTab(
         if let Ok(true) = gloo_utils::window().confirm_with_message(
             "EMERGENCY STOP: This will flatten all open positions immediately. Are you sure?",
         ) {
-            match gloo_net::http::Request::post("/health/control/emergency-stop")
-                .send()
-                .await
-            {
+            match post_control("/health/control/emergency-stop").await {
                 Ok(r) if r.ok() => {
                     set_toast_msg.set("Emergency Stop executed.".into());
                     set_toast_ok.set(true);

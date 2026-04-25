@@ -1,7 +1,7 @@
 use axum::{
     extract::ws::Message as WsMessage,
     extract::{Query, State, WebSocketUpgrade},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{Html, Json},
     routing::{get, post},
     Router,
@@ -23,6 +23,7 @@ use tokio::sync::{broadcast, Mutex};
 
 const DASHBOARD_HTML: &str = include_str!("dashboard_page.html");
 const MAX_TRANSACTIONS_LIMIT: usize = 100;
+const CONTROL_KEY_HEADER: &str = "x-polybot-control-key";
 
 #[derive(Clone)]
 pub struct HealthState {
@@ -103,10 +104,52 @@ pub struct HealthResponse {
     pub emergency_stops: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct ControlResponse {
     pub ok: bool,
     pub message: String,
+}
+
+fn dashboard_control_key() -> Option<String> {
+    std::env::var("POLYBOT_DASHBOARD_CONTROL_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn control_error(
+    status: StatusCode,
+    message: impl Into<String>,
+) -> (StatusCode, Json<ControlResponse>) {
+    (
+        status,
+        Json(ControlResponse {
+            ok: false,
+            message: message.into(),
+        }),
+    )
+}
+
+fn authorize_control(headers: &HeaderMap) -> Result<(), (StatusCode, Json<ControlResponse>)> {
+    let Some(expected) = dashboard_control_key() else {
+        return Err(control_error(
+            StatusCode::FORBIDDEN,
+            "Dashboard controls are disabled until POLYBOT_DASHBOARD_CONTROL_KEY is configured.",
+        ));
+    };
+
+    let provided = headers
+        .get(CONTROL_KEY_HEADER)
+        .and_then(|value| value.to_str().ok());
+
+    if provided == Some(expected.as_str()) {
+        Ok(())
+    } else {
+        Err(control_error(
+            StatusCode::UNAUTHORIZED,
+            "Missing or invalid dashboard control key.",
+        ))
+    }
 }
 
 pub async fn health_check(State(state): State<Arc<HealthState>>) -> Json<HealthResponse> {
@@ -439,8 +482,10 @@ pub async fn daily_stats_handler(
 }
 
 pub async fn pause_handler(
+    headers: HeaderMap,
     State(state): State<Arc<HealthState>>,
 ) -> Result<Json<ControlResponse>, (StatusCode, Json<ControlResponse>)> {
+    authorize_control(&headers)?;
     state.risk_engine.set_emergency_stop(true).await;
     state.metrics.set_paused(true);
     Ok(Json(ControlResponse {
@@ -450,9 +495,11 @@ pub async fn pause_handler(
 }
 
 pub async fn resume_handler(
+    headers: HeaderMap,
     State(state): State<Arc<HealthState>>,
     Query(query): Query<ResumeQuery>,
 ) -> Result<Json<ControlResponse>, (StatusCode, Json<ControlResponse>)> {
+    authorize_control(&headers)?;
     if state.risk_engine.is_loss_cooldown_active().await && query.confirm != Some(true) {
         return Err((
             StatusCode::CONFLICT,
@@ -483,8 +530,10 @@ pub async fn resume_handler(
 }
 
 pub async fn emergency_stop_handler(
+    headers: HeaderMap,
     State(state): State<Arc<HealthState>>,
 ) -> Result<Json<ControlResponse>, (StatusCode, Json<ControlResponse>)> {
+    authorize_control(&headers)?;
     state.risk_engine.set_emergency_stop(true).await;
     state.metrics.record_emergency_stop();
     state.metrics.set_paused(true);
@@ -578,8 +627,39 @@ mod tests {
     use crate::config::AppConfig;
     use crate::risk::RiskEngine;
     use crate::state::positions::PositionManager;
+    use axum::http::HeaderValue;
     use rust_decimal_macros::dec;
+    use serial_test::serial;
     use tokio::sync::Mutex;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn new(key: &'static str) -> Self {
+            Self {
+                key,
+                original: std::env::var(key).ok(),
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.original.as_ref() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    fn control_headers(key: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTROL_KEY_HEADER, HeaderValue::from_str(key).unwrap());
+        headers
+    }
 
     fn test_health_state(sqlite_path: String) -> Arc<HealthState> {
         let metrics = Arc::new(Metrics::new());
@@ -719,7 +799,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn resume_handler_requires_explicit_confirmation_after_loss_breach() {
+        let _guard = EnvVarGuard::new("POLYBOT_DASHBOARD_CONTROL_KEY");
+        std::env::set_var("POLYBOT_DASHBOARD_CONTROL_KEY", "test-control-key");
         let sqlite_path =
             std::env::temp_dir().join(format!("polybot-health-resume-{}.db", uuid::Uuid::new_v4()));
         let metrics = Arc::new(Metrics::new());
@@ -745,8 +828,61 @@ mod tests {
             event_tx: tokio::sync::broadcast::channel(2).0,
         });
 
-        let result = resume_handler(State(state), Query(ResumeQuery { confirm: None })).await;
+        let result = resume_handler(
+            control_headers("test-control-key"),
+            State(state),
+            Query(ResumeQuery { confirm: None }),
+        )
+        .await;
         assert!(result.is_err());
+
+        let _ = std::fs::remove_file(sqlite_path);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn dashboard_control_routes_require_configured_key() {
+        let _guard = EnvVarGuard::new("POLYBOT_DASHBOARD_CONTROL_KEY");
+        std::env::remove_var("POLYBOT_DASHBOARD_CONTROL_KEY");
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-health-auth-{}.db", uuid::Uuid::new_v4()));
+        let state = test_health_state(sqlite_path.to_string_lossy().to_string());
+
+        let result = pause_handler(HeaderMap::new(), State(state)).await;
+
+        assert!(matches!(result, Err((StatusCode::FORBIDDEN, _))));
+
+        let _ = std::fs::remove_file(sqlite_path);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn dashboard_control_routes_reject_wrong_key() {
+        let _guard = EnvVarGuard::new("POLYBOT_DASHBOARD_CONTROL_KEY");
+        std::env::set_var("POLYBOT_DASHBOARD_CONTROL_KEY", "test-control-key");
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-health-auth-{}.db", uuid::Uuid::new_v4()));
+        let state = test_health_state(sqlite_path.to_string_lossy().to_string());
+
+        let result = pause_handler(control_headers("wrong-key"), State(state)).await;
+
+        assert!(matches!(result, Err((StatusCode::UNAUTHORIZED, _))));
+
+        let _ = std::fs::remove_file(sqlite_path);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn dashboard_control_routes_accept_matching_key() {
+        let _guard = EnvVarGuard::new("POLYBOT_DASHBOARD_CONTROL_KEY");
+        std::env::set_var("POLYBOT_DASHBOARD_CONTROL_KEY", "test-control-key");
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-health-auth-{}.db", uuid::Uuid::new_v4()));
+        let state = test_health_state(sqlite_path.to_string_lossy().to_string());
+
+        let result = pause_handler(control_headers("test-control-key"), State(state)).await;
+
+        assert!(result.unwrap().0.ok);
 
         let _ = std::fs::remove_file(sqlite_path);
     }
