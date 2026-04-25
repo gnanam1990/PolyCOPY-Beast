@@ -9,6 +9,20 @@ pub struct RelayerSubmitRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RelayerPollRequest {
+    #[serde(rename = "transactionID")]
+    pub transaction_id: String,
+}
+
+impl RelayerPollRequest {
+    pub fn new(transaction_id: impl Into<String>) -> Self {
+        Self {
+            transaction_id: transaction_id.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RelayerSubmitResponse {
     #[serde(rename = "transactionID")]
     pub transaction_id: String,
@@ -96,6 +110,13 @@ mod tests {
         assert_eq!(record.transaction_id, "txn_abc");
         assert_eq!(record.trade_id.as_deref(), Some("trade-1"));
         assert_eq!(record.state, TransactionState::New);
+    }
+
+    #[test]
+    fn poll_request_serializes_transaction_id_field() {
+        let request = RelayerPollRequest::new("txn_abc");
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value, serde_json::json!({ "transactionID": "txn_abc" }));
     }
 
     #[test]

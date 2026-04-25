@@ -66,7 +66,8 @@ impl SimulatedRelayer {
         Ok(RelayerTransactionResponse {
             transaction_id: self.transaction_id.clone(),
             state: state.as_sqlite_str().to_string(),
-            transaction_hash: (state == TransactionState::Success)
+            transaction_hash: state
+                .is_terminal()
                 .then(|| format!("0xsim{}", self.transaction_id.replace('-', ""))),
             error_msg: (state == TransactionState::Failed)
                 .then(|| "simulated relayer failure".to_string()),
@@ -99,7 +100,7 @@ mod tests {
         let _ = relayer.poll().unwrap();
         let final_state = relayer.poll().unwrap();
         assert_eq!(final_state.state, "STATE_FAILED");
-        assert!(final_state.transaction_hash.is_none());
+        assert!(final_state.transaction_hash.is_some());
         assert_eq!(
             final_state.error_msg.as_deref(),
             Some("simulated relayer failure")
