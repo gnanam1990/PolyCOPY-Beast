@@ -1127,6 +1127,31 @@ impl SqliteStore {
             .map_err(|e| PolybotError::State(format!("Failed to collect tx rows: {}", e)))
     }
 
+    pub fn latest_transactions(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<polybot_common::types::TransactionRecord>, PolybotError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT transaction_id, trade_id, type, state, submitted_at, confirmed_at, transaction_hash, error_msg
+                 FROM transactions
+                 ORDER BY submitted_at DESC
+                 LIMIT ?1",
+            )
+            .map_err(|e| {
+                PolybotError::State(format!("Failed to prepare latest transactions: {}", e))
+            })?;
+        let rows = stmt
+            .query_map([limit as i64], Self::row_to_transaction_record)
+            .map_err(|e| {
+                PolybotError::State(format!("Failed to query latest transactions: {}", e))
+            })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| {
+            PolybotError::State(format!("Failed to collect latest transactions: {}", e))
+        })
+    }
+
     fn row_to_transaction_record(
         row: &rusqlite::Row<'_>,
     ) -> rusqlite::Result<polybot_common::types::TransactionRecord> {
@@ -2073,6 +2098,28 @@ mod transactions_crud_tests {
         let pending = store.list_non_terminal_transactions().unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].transaction_id, "txn_a");
+    }
+
+    #[test]
+    fn latest_transactions_orders_by_submitted_at_desc_and_limits() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut oldest = sample_record();
+        oldest.transaction_id = "txn_oldest".into();
+        oldest.submitted_at = chrono::DateTime::parse_from_rfc3339("2026-04-24T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let mut newest = sample_record();
+        newest.transaction_id = "txn_newest".into();
+        newest.submitted_at = chrono::DateTime::parse_from_rfc3339("2026-04-25T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        store.insert_transaction(&oldest).unwrap();
+        store.insert_transaction(&newest).unwrap();
+
+        let latest = store.latest_transactions(1).unwrap();
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].transaction_id, "txn_newest");
     }
 }
 
