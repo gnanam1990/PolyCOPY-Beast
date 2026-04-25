@@ -298,7 +298,7 @@ fn DashboardTab(
             <div class="card fade-in">
                 <div class="card-header">
                     <span class="card-title">"Virtual pUSD"</span>
-                    <div class="card-icon cyan">"â—Ž"</div>
+                    <div class="card-icon cyan">"V2"</div>
                 </div>
                 <div class="card-value">{move || health.get().map(|h| format!("${}", h.virtual_pusd)).unwrap_or_else(|| "-".into())}</div>
                 <div class="card-sub">
@@ -807,7 +807,7 @@ fn TransactionsTable(data: Signal<Vec<TransactionData>>) -> impl IntoView {
             if rows.is_empty() {
                 view! {
                     <div class="empty-state">
-                        <span style="font-size: 2rem; opacity: 0.2;">"â—Ž"</span>
+                        <span style="font-size: 2rem; opacity: 0.2;">"V2"</span>
                         <p>"No relayer transactions"</p>
                     </div>
                 }.into_any()
