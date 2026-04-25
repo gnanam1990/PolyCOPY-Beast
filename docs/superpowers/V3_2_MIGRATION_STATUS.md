@@ -30,6 +30,15 @@ Scope:
 - expose V2 state in dashboard and Telegram
 - keep live submission blocked behind an explicit safety gate
 
+## Final Verification for Simulation-Complete
+
+Run on 2026-04-25:
+- `cargo test --workspace`: PASS (35 `polybot-common`, 276 `polybot-core`, dashboard/doc-test targets clean)
+- `cargo clippy --workspace -- -D warnings`: PASS
+- `cargo check --workspace`: PASS
+- `trunk build --release` from `polybot-dashboard`: PASS
+- `cargo run -p polybot-core -- --setup-check`: PASS, `mode=Simulation simulation_preflight=true`
+
 ## Key quality signals at end of Phase 3
 
 - `cargo test --workspace`: **231 passed** (33 polybot-common + 198 polybot-core + 0 dashboard), 0 failed

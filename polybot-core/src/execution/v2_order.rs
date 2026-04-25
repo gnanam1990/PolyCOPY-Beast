@@ -55,9 +55,9 @@ pub fn parse_builder_code(raw: &str) -> Result<BuilderCode, PolybotError> {
     }
 
     let mut out = [0u8; 32];
-    for idx in 0..32 {
+    for (idx, byte) in out.iter_mut().enumerate() {
         let start = idx * 2;
-        out[idx] = decode_hex_byte(&hex[start..start + 2])?;
+        *byte = decode_hex_byte(&hex[start..start + 2])?;
     }
     Ok(BuilderCode(out))
 }

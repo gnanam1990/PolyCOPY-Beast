@@ -38,13 +38,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let setup_only = std::env::args().any(|arg| arg == "--setup-check");
     let preflight = setup::run_startup_preflight(&config).await?;
 
+    let preflight_summary = preflight.summary();
     tracing::info!(
         simulation = config.system.simulation,
-        preflight = %preflight.summary(),
+        preflight = %preflight_summary,
         "SuperFast PolyBot v3 starting"
     );
 
     if setup_only {
+        println!("Startup preflight completed successfully: {preflight_summary}");
         tracing::info!(
             "Startup preflight completed successfully; exiting because --setup-check was requested"
         );

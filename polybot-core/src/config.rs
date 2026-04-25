@@ -80,6 +80,7 @@ pub struct AppConfig {
     pub collateral: CollateralConfig,
     #[serde(default)]
     pub builder: Option<BuilderConfig>,
+    #[serde(default)]
     pub reconciliation: ReconciliationConfig,
 }
 
@@ -583,6 +584,53 @@ mod tests {
     fn default_config_is_valid() {
         let config = AppConfig::default();
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn legacy_config_without_reconciliation_uses_safe_default() {
+        let raw = r#"
+[system]
+simulation = true
+execution_mode = "simulation"
+log_level = "info"
+
+[risk]
+base_size_usd = 50
+base_size_pct = 0.015
+daily_max_loss_pct = 0.05
+per_market_exposure_pct = 0.10
+per_category_exposure_pct = 0.25
+max_position_size_usd = 500
+max_concurrent_positions = 20
+max_market_liquidity_pct = 0.02
+min_confidence = 6
+min_secret_level = 5
+slippage_threshold = 0.02
+
+[scanner]
+watch_dir = "./signals"
+processed_dir = "./signals/processed"
+dedup_window_secs = 300
+http_port = 8081
+
+[execution]
+slippage_threshold = 0.02
+ws_reconnect_max_wait_secs = 60
+heartbeat_interval_secs = 30
+order_timeout_secs = 30
+
+[telegram]
+allowed_user_ids = []
+command_rate_limit_per_min = 30
+emergency_stop_limit_per_hour = 3
+
+[dashboard]
+host = "0.0.0.0"
+port = 8080
+"#;
+
+        let config: AppConfig = toml::from_str(raw).expect("legacy config should parse");
+        assert!(!config.reconciliation.auto_heal);
     }
 
     #[test]
