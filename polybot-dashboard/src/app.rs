@@ -1,4 +1,6 @@
-use crate::data::{self, market_link, HealthData, MetricsData, PositionData, SignalData};
+use crate::data::{
+    self, market_link, HealthData, MetricsData, PositionData, SignalData, TransactionData,
+};
 use leptos::prelude::*;
 use leptos_meta::*;
 use wasm_bindgen::closure::Closure;
@@ -66,6 +68,10 @@ pub fn App() -> impl IntoView {
         let _ = refresh.get();
         async move { data::fetch_signals(12).await.unwrap_or_default() }
     });
+    let transactions_res = LocalResource::new(move || {
+        let _ = refresh.get();
+        async move { data::fetch_transactions(10).await.unwrap_or_default() }
+    });
 
     let health_sig = Signal::derive(move || health_res.get().as_deref().cloned().flatten());
     let metrics_sig = Signal::derive(move || metrics_res.get().as_deref().cloned().flatten());
@@ -73,6 +79,13 @@ pub fn App() -> impl IntoView {
         Signal::derive(move || positions_res.get().as_deref().cloned().unwrap_or_default());
     let signals_sig =
         Signal::derive(move || signals_res.get().as_deref().cloned().unwrap_or_default());
+    let transactions_sig = Signal::derive(move || {
+        transactions_res
+            .get()
+            .as_deref()
+            .cloned()
+            .unwrap_or_default()
+    });
 
     view! {
         <Stylesheet id="leptos" href="/style.css"/>
@@ -96,6 +109,7 @@ pub fn App() -> impl IntoView {
                                     metrics=metrics_sig
                                     positions=positions_sig
                                     signals=signals_sig
+                                    transactions=transactions_sig
                                     refresh=refresh
                                 />
                             }.into_any()
@@ -190,6 +204,7 @@ fn DashboardTab(
     metrics: Signal<Option<MetricsData>>,
     positions: Signal<Vec<PositionData>>,
     signals: Signal<Vec<SignalData>>,
+    transactions: Signal<Vec<TransactionData>>,
     refresh: RwSignal<u32>,
 ) -> impl IntoView {
     let (toast_msg, set_toast_msg) = signal(String::new());
@@ -276,6 +291,20 @@ fn DashboardTab(
                         let dd_f: f64 = dd.parse().unwrap_or(0.0);
                         let cls = if dd_f > 0.0 { "change neg" } else { "change pos" };
                         view! { <span class=cls>{format!("{}% Drawdown", dd_f)}</span> }
+                    }}
+                </div>
+            </div>
+
+            <div class="card fade-in">
+                <div class="card-header">
+                    <span class="card-title">"Virtual pUSD"</span>
+                    <div class="card-icon cyan">"â—Ž"</div>
+                </div>
+                <div class="card-value">{move || health.get().map(|h| format!("${}", h.virtual_pusd)).unwrap_or_else(|| "-".into())}</div>
+                <div class="card-sub">
+                    {move || {
+                        let reserved = health.get().map(|h| h.reserved_pusd).unwrap_or_else(|| "-".into());
+                        view! { <span class="change pos">{format!("reserved ${}", reserved)}</span> }
                     }}
                 </div>
             </div>
@@ -558,6 +587,16 @@ fn DashboardTab(
                 </div>
                 <SignalsTable data=signals />
             </div>
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">"Relayer Queue"</span>
+                    {move || {
+                        let count = transactions.get().len();
+                        view! { <span style="font-size: 0.8rem; color: var(--text-tertiary); font-weight: 600;">{format!("{} Items", count)}</span> }
+                    }}
+                </div>
+                <TransactionsTable data=transactions />
+            </div>
         </section>
     }
 }
@@ -748,6 +787,54 @@ fn SignalsTable(data: Signal<Vec<SignalData>>) -> impl IntoView {
                                             <td class="td-mono">{s.secret_level.to_string()}</td>
                                             <td>{cat_tag}</td>
                                             <td>{disp_tag}</td>
+                                        </tr>
+                                    }
+                                }).collect_view()}
+                            </tbody>
+                        </table>
+                    </div>
+                }.into_any()
+            }
+        }}
+    }
+}
+
+#[component]
+fn TransactionsTable(data: Signal<Vec<TransactionData>>) -> impl IntoView {
+    view! {
+        {move || {
+            let rows = data.get();
+            if rows.is_empty() {
+                view! {
+                    <div class="empty-state">
+                        <span style="font-size: 2rem; opacity: 0.2;">"â—Ž"</span>
+                        <p>"No relayer transactions"</p>
+                    </div>
+                }.into_any()
+            } else {
+                view! {
+                    <div style="overflow-x: auto;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>"Transaction"</th>
+                                    <th>"State"</th>
+                                    <th>"Hash"</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {rows.into_iter().map(|txn| {
+                                    let state_tag = match txn.state.as_str() {
+                                        "STATE_SUCCESS" => view! { <span class="tag tag-open">{txn.state}</span> }.into_any(),
+                                        "STATE_FAILED" => view! { <span class="tag tag-closed">{txn.state}</span> }.into_any(),
+                                        _ => view! { <span class="tag tag-other">{txn.state}</span> }.into_any(),
+                                    };
+                                    let hash = txn.transaction_hash.unwrap_or_else(|| "-".into());
+                                    view! {
+                                        <tr class="fade-in">
+                                            <td class="td-mono">{txn.transaction_id}</td>
+                                            <td>{state_tag}</td>
+                                            <td class="td-mono" style="max-width: 160px; overflow: hidden; text-overflow: ellipsis;">{hash}</td>
                                         </tr>
                                     }
                                 }).collect_view()}

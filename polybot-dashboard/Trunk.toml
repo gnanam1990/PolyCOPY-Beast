@@ -24,6 +24,10 @@ rewrite = "/signals"
 backend = "http://localhost:8080/signals"
 
 [[proxy]]
+rewrite = "/transactions"
+backend = "http://localhost:8080/transactions"
+
+[[proxy]]
 rewrite = "/daily"
 backend = "http://localhost:8080/daily"
 
