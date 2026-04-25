@@ -1,8 +1,8 @@
 use polybot_common::errors::PolybotError;
 use polybot_common::types::{FeeSchedule, OrderType, TradeDirection};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuilderCode(pub [u8; 32]);
 
 impl BuilderCode {
@@ -16,6 +16,25 @@ impl BuilderCode {
     }
 }
 
+impl Serialize for BuilderCode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.as_hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for BuilderCode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        parse_builder_code(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
 pub fn parse_builder_code(raw: &str) -> Result<BuilderCode, PolybotError> {
     let value = raw.trim();
     let Some(hex) = value.strip_prefix("0x") else {
@@ -23,6 +42,11 @@ pub fn parse_builder_code(raw: &str) -> Result<BuilderCode, PolybotError> {
             "BUILDER_CODE must be 0x-prefixed bytes32 hex".to_string(),
         ));
     };
+    if !hex.is_ascii() {
+        return Err(PolybotError::Config(
+            "BUILDER_CODE contains non-ASCII hex".to_string(),
+        ));
+    }
     if hex.len() != 64 {
         return Err(PolybotError::Config(format!(
             "BUILDER_CODE must be 32 bytes, got {} hex chars",
@@ -87,6 +111,20 @@ mod tests {
     }
 
     #[test]
+    fn builder_code_serializes_as_hex_string() {
+        let raw = "0x00000000000000000000000000000000000000000000000000000000deadbeef";
+        let parsed = parse_builder_code(raw).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), serde_json::json!(raw));
+    }
+
+    #[test]
+    fn builder_code_deserializes_from_hex_string() {
+        let raw = "0x00000000000000000000000000000000000000000000000000000000deadbeef";
+        let parsed: BuilderCode = serde_json::from_str(&format!("\"{}\"", raw)).unwrap();
+        assert_eq!(parsed.as_hex(), raw);
+    }
+
+    #[test]
     fn builder_code_rejects_wrong_length() {
         let err = parse_builder_code("0xdeadbeef").unwrap_err();
         assert!(format!("{}", err).contains("32 bytes"));
@@ -99,6 +137,13 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{}", err).contains("non-hex"));
+    }
+
+    #[test]
+    fn builder_code_rejects_non_ascii_without_panicking() {
+        let raw = format!("0x0{}{}", "é", "0".repeat(61));
+        let err = parse_builder_code(&raw).unwrap_err();
+        assert!(format!("{}", err).contains("non-ASCII"));
     }
 
     #[test]
