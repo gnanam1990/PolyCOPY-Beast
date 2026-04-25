@@ -5,6 +5,7 @@ pub mod rate_limiter;
 pub mod retry;
 pub mod transport;
 pub mod v2_client;
+pub mod v2_collateral;
 pub mod v2_flow;
 pub mod v2_market;
 pub mod v2_order;

@@ -1162,6 +1162,7 @@ impl SqliteStore {
             "order" => TransactionKind::Order,
             "cancel" => TransactionKind::Cancel,
             "wrap" => TransactionKind::Wrap,
+            "unwrap" => TransactionKind::Unwrap,
             "approve" => TransactionKind::Approve,
             "redeem" => TransactionKind::Redeem,
             "deploy" => TransactionKind::Deploy,
