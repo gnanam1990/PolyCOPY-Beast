@@ -51,6 +51,25 @@ pub(crate) fn live_v2_submission_config(
         ));
     }
 
+    // Validate RELAYER_URL is a well-formed http(s) URL. Catches obvious typos
+    // ("localhost:9000", "ftp://...", trailing whitespace) at startup instead
+    // of at the first order submission.
+    let parsed = reqwest::Url::parse(relayer.url.trim()).map_err(|e| {
+        PolybotError::Config(format!(
+            "RELAYER_URL is not a valid URL ({}): {}",
+            relayer.url, e
+        ))
+    })?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => {
+            return Err(PolybotError::Config(format!(
+                "RELAYER_URL must use http or https scheme, got '{}'",
+                other
+            )));
+        }
+    }
+
     v2_signing::parse_builder_code(&builder.code).map_err(|err| {
         PolybotError::Config(format!("Invalid BUILDER_CODE for live CLOB V2: {}", err))
     })?;

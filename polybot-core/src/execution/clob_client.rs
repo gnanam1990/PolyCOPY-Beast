@@ -36,21 +36,31 @@ use super::v2_signing::{build_v2_order_payload, payload_to_relayer_json, sign_v2
 /// that alias is used. The alias will be removed in a future phase once V1
 /// simulation is sunset.
 pub(crate) fn read_private_key_from_env() -> Result<String, PolybotError> {
-    match std::env::var("POLYMARKET_PRIVATE_KEY") {
-        Ok(value) => Ok(value),
+    let raw = match std::env::var("POLYMARKET_PRIVATE_KEY") {
+        Ok(value) => value,
         Err(_) => match std::env::var("POLYBOT_PRIVATE_KEY") {
             Ok(value) => {
                 tracing::warn!(
                     "POLYBOT_PRIVATE_KEY is deprecated — rename to POLYMARKET_PRIVATE_KEY before the V1 alias is removed."
                 );
-                Ok(value)
+                value
             }
-            Err(_) => Err(PolybotError::Config(
-                "POLYMARKET_PRIVATE_KEY not set (legacy POLYBOT_PRIVATE_KEY also absent)"
-                    .to_string(),
-            )),
+            Err(_) => {
+                return Err(PolybotError::Config(
+                    "POLYMARKET_PRIVATE_KEY not set (legacy POLYBOT_PRIVATE_KEY also absent)"
+                        .to_string(),
+                ));
+            }
         },
-    }
+    };
+    // Surface malformed keys at startup rather than at the first sign() call.
+    LocalSigner::from_str(&raw).map_err(|e| {
+        PolybotError::Config(format!(
+            "Invalid POLYMARKET_PRIVATE_KEY (must be 0x-prefixed 32-byte hex): {}",
+            e
+        ))
+    })?;
+    Ok(raw)
 }
 
 #[derive(Debug, Error)]
@@ -842,11 +852,14 @@ impl ClobClient {
             .map_err(SubmitOrderError::from)?;
         let trade = map_submit_response_to_trade(order, &submit_response)
             .map_err(SubmitOrderError::from)?;
+        // Polygon block time is ~2s and relayer-routed CLOB v2 transactions
+        // commonly take 1–5s to reach a terminal state. Poll for up to ~30s
+        // (60 attempts × 500ms) so we don't orphan a confirming transaction.
         let terminal = relayer_client
             .poll_transaction_until_terminal(
                 &submit_response.transaction_id,
-                10,
-                std::time::Duration::from_millis(10),
+                60,
+                std::time::Duration::from_millis(500),
             )
             .await
             .map_err(SubmitOrderError::from)?;

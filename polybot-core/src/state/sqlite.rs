@@ -131,6 +131,74 @@ pub struct SqliteStore {
     conn: rusqlite::Connection,
 }
 
+/// Inspect a migration's SQL batch and drop any
+/// `ALTER TABLE <t> ADD COLUMN <c> ...` statements whose column already exists
+/// on `<t>`. SQLite lacks `ADD COLUMN IF NOT EXISTS`, so re-running a migration
+/// against a DB that already has the column would otherwise abort the
+/// transaction with "duplicate column name". Other statements pass through
+/// untouched.
+fn filter_existing_add_columns(
+    conn: &rusqlite::Connection,
+    sql: &str,
+) -> Result<String, PolybotError> {
+    let mut out = String::with_capacity(sql.len());
+    for raw_stmt in sql.split(';') {
+        let stmt = raw_stmt.trim();
+        if stmt.is_empty() {
+            continue;
+        }
+        if let Some((table, column)) = parse_add_column(stmt) {
+            if column_exists(conn, &table, &column)? {
+                tracing::warn!(
+                    table = %table,
+                    column = %column,
+                    "Skipping ADD COLUMN: column already exists (idempotent re-run)"
+                );
+                continue;
+            }
+        }
+        out.push_str(stmt);
+        out.push_str(";\n");
+    }
+    Ok(out)
+}
+
+fn parse_add_column(stmt: &str) -> Option<(String, String)> {
+    let upper = stmt.to_ascii_uppercase();
+    let alter_idx = upper.find("ALTER TABLE")?;
+    let add_idx = upper.find("ADD COLUMN")?;
+    if add_idx <= alter_idx {
+        return None;
+    }
+    let table_slice = stmt[alter_idx + "ALTER TABLE".len()..add_idx].trim();
+    let table = table_slice.trim_matches(|c: char| c == '"' || c == '`' || c == '[' || c == ']');
+    let after_add = stmt[add_idx + "ADD COLUMN".len()..].trim();
+    let column = after_add
+        .split(|c: char| c.is_whitespace() || c == '(')
+        .find(|s| !s.is_empty())?
+        .trim_matches(|c: char| c == '"' || c == '`' || c == '[' || c == ']');
+    if table.is_empty() || column.is_empty() {
+        return None;
+    }
+    Some((table.to_string(), column.to_string()))
+}
+
+fn column_exists(
+    conn: &rusqlite::Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool, PolybotError> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info(\"{}\")", table.replace('"', "\"\"")))
+        .map_err(|e| PolybotError::State(format!("Failed to inspect {} columns: {}", table, e)))?;
+    let exists = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| PolybotError::State(format!("Failed to query {} columns: {}", table, e)))?
+        .filter_map(Result::ok)
+        .any(|name| name == column);
+    Ok(exists)
+}
+
 impl SqliteStore {
     fn canonicalize_copied_lot_side(side: &str) -> String {
         match side.to_ascii_uppercase().as_str() {
@@ -337,13 +405,18 @@ impl SqliteStore {
                 description = migration.description,
                 "Applying schema migration"
             );
+            // Strip ALTER TABLE ADD COLUMN statements whose target column
+            // already exists. SQLite has no `ADD COLUMN IF NOT EXISTS`, and
+            // recovering a DB where the column was added out-of-band would
+            // otherwise crash the runner with "duplicate column name".
+            let effective_sql = filter_existing_add_columns(&self.conn, migration.sql)?;
             let tx = self.conn.unchecked_transaction().map_err(|e| {
                 PolybotError::State(format!(
                     "Failed to begin migration v{} ({}) transaction: {}",
                     migration.version, migration.description, e
                 ))
             })?;
-            tx.execute_batch(migration.sql).map_err(|e| {
+            tx.execute_batch(&effective_sql).map_err(|e| {
                 PolybotError::State(format!(
                     "Migration v{} ({}) failed: {}",
                     migration.version, migration.description, e

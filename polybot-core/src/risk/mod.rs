@@ -124,20 +124,50 @@ impl RiskEngine {
     }
 
     async fn fetch_source_remaining_tokens(&self, signal: &Signal) -> Option<Decimal> {
-        let client =
-            polymarket_client_sdk::data::Client::new(&self.config.scanner.data_api_url).ok()?;
-        let wallet: polymarket_client_sdk::types::Address = signal.wallet_address.parse().ok()?;
+        let client = match polymarket_client_sdk::data::Client::new(
+            &self.config.scanner.data_api_url,
+        ) {
+            Ok(c) => c,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    data_api_url = %self.config.scanner.data_api_url,
+                    "Failed to construct data API client; cannot fetch source remaining position"
+                );
+                return None;
+            }
+        };
+        let wallet: polymarket_client_sdk::types::Address = match signal.wallet_address.parse() {
+            Ok(w) => w,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    wallet = %signal.wallet_address,
+                    "Invalid wallet address; cannot fetch source remaining position"
+                );
+                return None;
+            }
+        };
         let side = Self::copied_lot_side_key(signal.side);
         let mut offset = 0;
 
         loop {
-            let request = polymarket_client_sdk::data::types::request::PositionsRequest::builder()
+            let request = match polymarket_client_sdk::data::types::request::PositionsRequest::builder()
                 .user(wallet)
                 .limit(500)
-                .ok()?
-                .offset(offset)
-                .ok()?
-                .build();
+                .and_then(|b| b.offset(offset))
+            {
+                Ok(b) => b.build(),
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        wallet = %signal.wallet_address,
+                        offset,
+                        "Failed to build positions request; cannot fetch source remaining position"
+                    );
+                    return None;
+                }
+            };
 
             let positions = match client.positions(&request).await {
                 Ok(positions) => positions,
