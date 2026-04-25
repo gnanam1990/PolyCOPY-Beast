@@ -4,6 +4,7 @@ pub mod order_builder;
 pub mod rate_limiter;
 pub mod retry;
 pub mod transport;
+pub mod v2_client;
 pub mod v2_flow;
 pub mod v2_order;
 pub mod v2_relayer;
@@ -335,8 +336,17 @@ pub async fn run_execution_engine(
 
                         let started = Instant::now();
                         let mut attempt = 0u32;
+                        let relayer = config.relayer.clone();
+                        let builder = config.builder.clone();
                         loop {
-                            match client.submit_order(&order).await {
+                            let submit_result = if let (Some(relayer), Some(builder)) =
+                                (relayer.as_ref(), builder.as_ref())
+                            {
+                                client.submit_order_v2(&order, relayer, &builder.code).await
+                            } else {
+                                client.submit_order(&order).await
+                            };
+                            match submit_result {
                                 Ok(trade) => {
                                     if matches!(trade.status, TradeStatus::PartiallyFilled) {
                                         tracing::info!(
@@ -347,22 +357,38 @@ pub async fn run_execution_engine(
                                             "Partial fill received; forwarding filled amount to state without retrying remainder"
                                         );
                                     }
+                                    if matches!(trade.status, TradeStatus::Pending)
+                                        && trade.transaction_id.is_some()
+                                    {
+                                        tracing::info!(
+                                            signal_id = %decision.signal_id,
+                                            market_id = %decision.market_id,
+                                            transaction_id = %trade.transaction_id.clone().unwrap_or_default(),
+                                            relayer_state = ?trade.relayer_state,
+                                            "Relayer accepted order; tracking async transaction lifecycle"
+                                        );
+                                    }
                                     metrics.record_latency(started.elapsed().as_micros() as u64);
-                                    metrics.record_trade(false);
-                                    metrics.broadcast_event(
-                                        "trade_placed",
-                                        serde_json::json!({
-                                            "signal_id": &decision.signal_id,
-                                            "market_id": &decision.market_id,
-                                            "size_usd": trade.size_usd.to_string(),
-                                            "price": trade.price.to_string(),
-                                            "mode": "live",
-                                        }),
-                                    );
+                                    if !matches!(trade.status, TradeStatus::Pending) {
+                                        metrics.record_trade(false);
+                                    }
+                                    metrics.broadcast_event("trade_placed", serde_json::json!({
+                                        "signal_id": &decision.signal_id,
+                                        "market_id": &decision.market_id,
+                                        "size_usd": trade.size_usd.to_string(),
+                                        "price": trade.price.to_string(),
+                                        "mode": "live",
+                                        "transaction_id": &trade.transaction_id,
+                                        "relayer_state": trade.relayer_state.map(|s| s.as_sqlite_str().to_string()),
+                                    }));
                                     if let Some(alerts) = &alerts {
                                         alerts.info(format!(
-                                            "Live trade executed: signal={} market={} size_usd={} price={}",
-                                            decision.signal_id, decision.market_id, trade.size_usd, trade.price
+                                            "Live order submitted: signal={} market={} size_usd={} price={} txid={}",
+                                            decision.signal_id,
+                                            decision.market_id,
+                                            trade.size_usd,
+                                            trade.price,
+                                            trade.transaction_id.clone().unwrap_or_default()
                                         ));
                                     }
                                     if state_sender.send(trade).await.is_err() {

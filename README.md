@@ -9,6 +9,11 @@
 
 **SuperFast PolyBot v3.0** is a production-grade, Rust-powered copy-trading engine built specifically for Polymarket's Central Limit Order Book (CLOB).
 
+Current migration note:
+- V3.2 CLOB V2 work is in progress on the test endpoint.
+- The current V3.2 slice covers builder-code validation, relayer submit/poll plumbing, and SQLite transaction tracking.
+- Gasless pUSD wrap/approve/redeem flow is not implemented yet in this slice.
+
 After deep research into 15+ active open-source repos and the official Polymarket SDK, this bot delivers a realistic, low-latency solution for solo developers running on Windows — with **zero Docker, zero Redis, and zero cloud dependencies**.
 
 ## V3.2 Status

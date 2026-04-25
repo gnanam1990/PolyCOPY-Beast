@@ -759,4 +759,49 @@ mod tests {
         let _ = std::fs::remove_file(sqlite_path);
         std::env::remove_var("POLYBOT_SQLITE_PATH");
     }
+
+    #[tokio::test]
+    async fn run_in_memory_persists_transaction_row_for_pending_trade() {
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-state-{}.db", uuid::Uuid::new_v4()));
+        std::env::set_var("POLYBOT_SQLITE_PATH", &sqlite_path);
+
+        let metrics = Arc::new(Metrics::new());
+        let position_manager = Arc::new(Mutex::new(positions::PositionManager::new()));
+        let market_prices = Arc::new(RwLock::new(HashMap::new()));
+        let (tx, rx) = mpsc::channel(4);
+        let config = AppConfig::default();
+
+        let mut trade = test_trade("m1", Side::Yes, Category::Politics);
+        trade.simulated = false;
+        trade.status = TradeStatus::Pending;
+        trade.transaction_id = Some("txn_abc123".to_string());
+        trade.relayer_state = Some(polybot_common::types::TransactionState::New);
+
+        tx.send(trade).await.unwrap();
+        drop(tx);
+
+        run_in_memory(
+            rx,
+            metrics,
+            position_manager,
+            market_prices,
+            Some(sqlite_path.to_string_lossy().as_ref()),
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let reopened = sqlite::SqliteStore::open(&sqlite_path).unwrap();
+        let transaction = reopened.get_transaction("txn_abc123").unwrap().unwrap();
+        assert_eq!(transaction.trade_id.as_deref(), Some("trade-m1-Yes"));
+        assert_eq!(transaction.kind, TransactionKind::Order);
+        assert_eq!(
+            transaction.state,
+            polybot_common::types::TransactionState::New
+        );
+
+        let _ = std::fs::remove_file(sqlite_path);
+        std::env::remove_var("POLYBOT_SQLITE_PATH");
+    }
 }
