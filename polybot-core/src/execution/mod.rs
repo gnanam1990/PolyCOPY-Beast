@@ -4,6 +4,7 @@ pub mod order_builder;
 pub mod rate_limiter;
 pub mod retry;
 pub mod transport;
+pub mod v2_order;
 
 use polybot_common::constants::MIN_POSITION_USDC;
 use polybot_common::errors::PolybotError;
