@@ -103,7 +103,7 @@ Operator Surfaces
 |-- docs/                    Windows runbook and migration notes
 |-- config.toml              Default local config
 |-- .env.example             Environment variable reference
-`-- SuperFast_PolyBot_v3_PRD_Enhanced.md
+`-- SuperFast_PolyBot_v3_2_CLOB_V2_PRD.md
 ```
 
 ## Quick Start: Paper Trading
