@@ -22,6 +22,7 @@ use rust_decimal::Decimal;
 use tokio::sync::{broadcast, Mutex};
 
 const DASHBOARD_HTML: &str = include_str!("dashboard_page.html");
+const MAX_TRANSACTIONS_LIMIT: usize = 100;
 
 #[derive(Clone)]
 pub struct HealthState {
@@ -398,7 +399,7 @@ pub async fn transactions_handler(
     State(state): State<Arc<HealthState>>,
     Query(query): Query<TransactionsQuery>,
 ) -> Json<Vec<TransactionRecord>> {
-    let limit = query.limit.unwrap_or(20);
+    let limit = query.limit.unwrap_or(20).min(MAX_TRANSACTIONS_LIMIT);
     match SqliteStore::open(std::path::Path::new(&state.sqlite_path)) {
         Ok(store) => Json(store.latest_transactions(limit).unwrap_or_default()),
         Err(_) => Json(Vec::new()),
@@ -651,6 +652,42 @@ mod tests {
                 .0;
 
         assert!(response.is_empty());
+    }
+
+    #[tokio::test]
+    async fn transactions_handler_clamps_requested_limit() {
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-health-txns-{}.db", uuid::Uuid::new_v4()));
+        let state = test_health_state(sqlite_path.to_string_lossy().to_string());
+        let store = SqliteStore::open(&sqlite_path).unwrap();
+
+        for idx in 0..(MAX_TRANSACTIONS_LIMIT + 1) {
+            let submitted_at = chrono::Utc::now() + chrono::Duration::seconds(idx as i64);
+            let record = TransactionRecord {
+                transaction_id: format!("txn-{idx}"),
+                trade_id: None,
+                kind: polybot_common::types::TransactionKind::Order,
+                state: polybot_common::types::TransactionState::Success,
+                submitted_at,
+                confirmed_at: Some(submitted_at),
+                transaction_hash: Some(format!("0x{idx:x}")),
+                error_msg: None,
+            };
+            store.insert_transaction(&record).unwrap();
+        }
+
+        let response = transactions_handler(
+            State(state),
+            Query(TransactionsQuery {
+                limit: Some(usize::MAX),
+            }),
+        )
+        .await
+        .0;
+
+        assert_eq!(response.len(), MAX_TRANSACTIONS_LIMIT);
+
+        let _ = std::fs::remove_file(sqlite_path);
     }
 
     #[tokio::test]
