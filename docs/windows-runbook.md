@@ -79,6 +79,7 @@ RELAYER_URL=https://...
 RELAYER_API_KEY=...
 RELAYER_API_KEY_ADDRESS=0x...
 BUILDER_CODE=0x...
+POLYBOT_COLLATERAL_RECIPIENT_ADDRESS=0x...
 
 POLYBOT_CLOB_ENDPOINT=https://clob.polymarket.com
 POLYBOT_WS_ENDPOINT=wss://ws-subscriptions-clob.polymarket.com
@@ -131,7 +132,7 @@ Then:
 - Send or ingest one tiny test signal only.
 - Verify `/positions`, `/executions`, and `/transactions` after the order lifecycle.
 - Test pause, resume, and emergency stop with the dashboard control key.
-- If Telegram is configured, verify allowlisted command access and alerts.
+- If Telegram is configured, verify allowlisted command access, alerts, `/wrap <amount>` plan preview, and `/redeem <condition_id> <index_sets>` plan preview.
 
 Do not scale capital until the tiny order path is boring and repeatable.
 

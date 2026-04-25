@@ -7,6 +7,10 @@ use super::confirm::{ConfirmAction, ConfirmState};
 use super::rate_limiter::CommandRateLimiter;
 use super::Command;
 use crate::config::AppConfig;
+use crate::execution::clob_client::ClobClient;
+use crate::execution::v2_collateral::{
+    build_redeem_positions_plan, build_wrap_plan, CollateralOperationPlan,
+};
 use crate::metrics::Metrics;
 use crate::risk::RiskEngine;
 use crate::setup;
@@ -15,6 +19,8 @@ use crate::state::positions::PositionManager;
 use crate::state::reconciliation::Reconciler;
 use crate::state::sqlite::{SignalLogEntry, SqliteStore, TargetRow};
 use polybot_common::types::{ExecutionMode, Position};
+use rust_decimal::Decimal;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -84,6 +90,121 @@ fn load_requested_mode_summary() -> Option<String> {
     SqliteStore::open(std::path::Path::new(&sqlite_path))
         .ok()
         .and_then(|store| store.get_config(requested_mode_key()).ok().flatten())
+}
+
+fn parse_collateral_amount(raw: &str) -> Result<Decimal, String> {
+    let amount = Decimal::from_str(raw.trim()).map_err(|_| "Amount must be a decimal number")?;
+    if amount <= Decimal::ZERO {
+        return Err("Amount must be greater than zero".to_string());
+    }
+    Ok(amount)
+}
+
+fn parse_redeem_index_sets(raw: &str) -> Result<Vec<u64>, String> {
+    let index_sets = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| format!("Invalid index set '{}'", value))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if index_sets.is_empty() || index_sets.iter().any(|value| *value == 0) {
+        return Err("Index sets must be positive integers, for example: 1,2".to_string());
+    }
+
+    Ok(index_sets)
+}
+
+fn collateral_recipient_address() -> Result<String, String> {
+    if let Ok(address) = std::env::var("POLYBOT_COLLATERAL_RECIPIENT_ADDRESS") {
+        let trimmed = address.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    if let Ok(address) = std::env::var("RELAYER_API_KEY_ADDRESS") {
+        let trimmed = address.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    ClobClient::from_env()
+        .and_then(|client| client.trading_wallet_address().map(|address| address.to_string()))
+        .map_err(|err| {
+            format!(
+                "No collateral recipient wallet is configured. Set POLYBOT_COLLATERAL_RECIPIENT_ADDRESS or live wallet env first. Details: {}",
+                err
+            )
+        })
+}
+
+fn format_collateral_plan(plan: &CollateralOperationPlan, mode: ExecutionMode) -> String {
+    let tx_lines = plan
+        .transactions
+        .iter()
+        .enumerate()
+        .map(|(index, tx)| {
+            format!(
+                "{}. to={} data={} bytes value={}",
+                index + 1,
+                tx.to,
+                tx.data.len().saturating_sub(2) / 2,
+                tx.value
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let live_note = if matches!(mode, ExecutionMode::Live) {
+        "\nLive note: calldata plan is ready. Automatic relayer submit requires a signed Safe/Proxy transaction payload; unsigned plans are never auto-submitted."
+    } else {
+        "\nDry run only: switch to live mode with relayer credentials before any on-chain submission."
+    };
+
+    format!(
+        "Collateral plan: {:?}\n{}\nTransactions: {}\n{}{}",
+        plan.kind,
+        plan.description,
+        plan.transactions.len(),
+        tx_lines,
+        live_note
+    )
+}
+
+fn build_wrap_plan_message(config: &AppConfig, amount: Decimal) -> Result<String, String> {
+    let recipient = collateral_recipient_address()?;
+    let plan = build_wrap_plan(&config.collateral, &recipient, amount)
+        .map_err(|err| format!("Wrap plan failed: {}", err))?;
+    Ok(format!(
+        "Wrap amount: {} USDC.e -> pUSD\nRecipient: {}\n{}",
+        amount,
+        recipient,
+        format_collateral_plan(&plan, config.system.execution_mode)
+    ))
+}
+
+fn build_redeem_plan_message(
+    config: &AppConfig,
+    condition_id: &str,
+    index_sets: Vec<u64>,
+) -> Result<String, String> {
+    let plan = build_redeem_positions_plan(&config.collateral, condition_id, index_sets.clone())
+        .map_err(|err| format!("Redeem plan failed: {}", err))?;
+    Ok(format!(
+        "Redeem condition: {}\nIndex sets: {}\n{}",
+        condition_id,
+        index_sets
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(","),
+        format_collateral_plan(&plan, config.system.execution_mode)
+    ))
 }
 
 async fn confirm_mode_switch(
@@ -338,6 +459,19 @@ pub async fn handle_command(
                     }
                 }
             }
+            Some(ConfirmAction::WrapCollateral { amount }) => {
+                let body =
+                    build_wrap_plan_message(&config, amount).unwrap_or_else(|message| message);
+                bot.send_message(msg.chat.id, body).await?;
+            }
+            Some(ConfirmAction::RedeemPositions {
+                condition_id,
+                index_sets,
+            }) => {
+                let body = build_redeem_plan_message(&config, &condition_id, index_sets)
+                    .unwrap_or_else(|message| message);
+                bot.send_message(msg.chat.id, body).await?;
+            }
             None => {
                 bot.send_message(msg.chat.id, "No pending confirmation. Send a destructive command first, then /confirm within 60 seconds.").await?;
             }
@@ -466,6 +600,61 @@ pub async fn handle_command(
                 bot.send_message(msg.chat.id, message).await?;
             }
         },
+
+        Command::Wrap(raw_amount) => match parse_collateral_amount(&raw_amount) {
+            Ok(amount) => {
+                confirm_state.register(user_id, ConfirmAction::WrapCollateral { amount });
+                bot.send_message(
+                    msg.chat.id,
+                    format!(
+                        "Wrap {} USDC.e into pUSD requires confirmation. Reply /confirm within 60 seconds to build the gasless transaction plan.",
+                        amount
+                    ),
+                )
+                .await?;
+            }
+            Err(message) => {
+                bot.send_message(msg.chat.id, format!("Usage: /wrap <amount>\n{}", message))
+                    .await?;
+            }
+        },
+
+        Command::Redeem(condition_id, raw_index_sets) => {
+            match parse_redeem_index_sets(&raw_index_sets) {
+                Ok(index_sets) => {
+                    confirm_state.register(
+                        user_id,
+                        ConfirmAction::RedeemPositions {
+                            condition_id: condition_id.clone(),
+                            index_sets: index_sets.clone(),
+                        },
+                    );
+                    bot.send_message(
+                        msg.chat.id,
+                        format!(
+                            "Redeem condition {} index sets {} requires confirmation. Reply /confirm within 60 seconds to build the gasless transaction plan.",
+                            condition_id,
+                            index_sets
+                                .iter()
+                                .map(u64::to_string)
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        ),
+                    )
+                    .await?;
+                }
+                Err(message) => {
+                    bot.send_message(
+                        msg.chat.id,
+                        format!(
+                            "Usage: /redeem <condition_id> <index_sets_comma_separated>\n{}",
+                            message
+                        ),
+                    )
+                    .await?;
+                }
+            }
+        }
 
         Command::Config(key, value) => {
             match risk_engine.update_runtime_config(&key, &value).await {
@@ -687,6 +876,41 @@ mod tests {
             polybot_common::types::ExecutionMode::Simulation
         );
         assert!(resolve_mode_switch(Some("paper")).is_err());
+    }
+
+    #[test]
+    fn parse_collateral_amount_requires_positive_decimal() {
+        assert_eq!(parse_collateral_amount("12.5").unwrap(), dec!(12.5));
+        assert!(parse_collateral_amount("0").is_err());
+        assert!(parse_collateral_amount("nope").is_err());
+    }
+
+    #[test]
+    fn parse_redeem_index_sets_accepts_comma_list() {
+        assert_eq!(parse_redeem_index_sets("1,2").unwrap(), vec![1, 2]);
+        assert!(parse_redeem_index_sets("").is_err());
+        assert!(parse_redeem_index_sets("0").is_err());
+        assert!(parse_redeem_index_sets("1,nope").is_err());
+    }
+
+    #[test]
+    fn format_collateral_plan_summarizes_transactions() {
+        let plan = crate::execution::v2_collateral::build_redeem_positions_plan(
+            &crate::config::CollateralConfig {
+                token: "pUSD".to_string(),
+                pusd_address: "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB".to_string(),
+                onramp_address: "0x93070a847efEf7F70739046A929D47a521F5B8ee".to_string(),
+                offramp_address: "0x2957922Eb93258b93368531d39fAcCA3B4dC5854".to_string(),
+                usdc_e_address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".to_string(),
+            },
+            "0xaf5e903876ad42de97e1cf02c2ef8484df69bcfc5541b96a400116557d1e504e",
+            vec![1, 2],
+        )
+        .unwrap();
+
+        let output = format_collateral_plan(&plan, ExecutionMode::Simulation);
+        assert!(output.contains("Collateral plan"));
+        assert!(output.contains("Dry run only"));
     }
 
     #[test]

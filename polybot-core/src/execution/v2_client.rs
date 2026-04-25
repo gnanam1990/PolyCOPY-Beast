@@ -26,6 +26,44 @@ pub struct RelayerSubmitResponse {
     pub state: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayerSignatureParams {
+    pub gas_price: String,
+    pub operation: String,
+    pub safe_txn_gas: String,
+    pub base_gas: String,
+    pub gas_token: String,
+    pub refund_receiver: String,
+}
+
+impl Default for RelayerSignatureParams {
+    fn default() -> Self {
+        Self {
+            gas_price: "0".to_string(),
+            operation: "0".to_string(),
+            safe_txn_gas: "0".to_string(),
+            base_gas: "0".to_string(),
+            gas_token: "0x0000000000000000000000000000000000000000".to_string(),
+            refund_receiver: "0x0000000000000000000000000000000000000000".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayerTransactionSubmitRequest {
+    pub from: String,
+    pub to: String,
+    pub proxy_wallet: String,
+    pub data: String,
+    pub nonce: String,
+    pub signature: String,
+    pub signature_params: RelayerSignatureParams,
+    #[serde(rename = "type")]
+    pub tx_type: String,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct RelayerTransactionResponse {
     #[serde(rename = "transactionID")]
@@ -96,6 +134,34 @@ impl RelayerClient {
 
         response.json::<RelayerSubmitResponse>().await.map_err(|e| {
             PolybotError::Execution(format!("Failed to parse relayer submit response: {}", e))
+        })
+    }
+
+    pub async fn submit_transaction(
+        &self,
+        request: &RelayerTransactionSubmitRequest,
+    ) -> Result<RelayerSubmitResponse, PolybotError> {
+        let response = self
+            .with_auth_headers(self.http_client.post(format!("{}/submit", self.base_url)))
+            .json(request)
+            .send()
+            .await
+            .map_err(|e| {
+                PolybotError::Execution(format!("Relayer transaction submit failed: {}", e))
+            })?;
+
+        if !response.status().is_success() {
+            return Err(PolybotError::Execution(format!(
+                "Relayer transaction submit failed with HTTP {}",
+                response.status()
+            )));
+        }
+
+        response.json::<RelayerSubmitResponse>().await.map_err(|e| {
+            PolybotError::Execution(format!(
+                "Failed to parse relayer transaction submit response: {}",
+                e
+            ))
         })
     }
 
@@ -253,6 +319,7 @@ mod tests {
         let state = Arc::new(CaptureState::default());
         let app = Router::new()
             .route("/order", post(submit_handler))
+            .route("/submit", post(submit_handler))
             .route("/transaction", get(transaction_handler))
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
@@ -326,6 +393,36 @@ mod tests {
         assert_eq!(
             state.api_key_address.lock().unwrap().as_deref(),
             Some("0xabc123abc123abc123abc123abc123abc123abc1")
+        );
+    }
+
+    #[tokio::test]
+    async fn relayer_transaction_submit_posts_to_submit_endpoint() {
+        let (client, state) = spawn_relayer_server().await;
+        let response = client
+            .submit_transaction(&RelayerTransactionSubmitRequest {
+                from: "0x1111111111111111111111111111111111111111".to_string(),
+                to: "0x2222222222222222222222222222222222222222".to_string(),
+                proxy_wallet: "0x3333333333333333333333333333333333333333".to_string(),
+                data: "0x095ea7b3".to_string(),
+                nonce: "60".to_string(),
+                signature: "0xabc".to_string(),
+                signature_params: RelayerSignatureParams::default(),
+                tx_type: "SAFE".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(response.transaction_id, "txn_submit_1");
+        assert_eq!(
+            state
+                .submit_body
+                .lock()
+                .unwrap()
+                .as_ref()
+                .and_then(|body| body.get("proxyWallet"))
+                .and_then(|value| value.as_str()),
+            Some("0x3333333333333333333333333333333333333333")
         );
     }
 
