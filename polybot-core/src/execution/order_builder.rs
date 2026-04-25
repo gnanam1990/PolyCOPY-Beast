@@ -131,8 +131,9 @@ pub fn select_v2_order_type(
     };
 
     let combined = decision.confidence_multiplier * decision.secret_level_multiplier;
+    let fok_max_fee_centibps = fok_max_fee_bps.saturating_mul(100);
     if combined >= rust_decimal_macros::dec!(1.5)
-        && fee_schedule.taker_bps_true() <= fok_max_fee_bps
+        && fee_schedule.taker_fee_bps <= fok_max_fee_centibps
     {
         OrderType::Fok
     } else {
@@ -251,6 +252,20 @@ mod tests {
         let decision = test_decision(dec!(1.5), dec!(1.0));
         let fee_schedule = FeeSchedule {
             taker_fee_bps: 12_500,
+            maker_fee_bps: 0,
+            rebate_bps: 0,
+        };
+
+        let order_type = select_v2_order_type(&decision, Some(fee_schedule), 50);
+
+        assert_eq!(order_type, OrderType::Limit);
+    }
+
+    #[test]
+    fn v2_routing_rejects_fractional_bps_above_threshold() {
+        let decision = test_decision(dec!(1.5), dec!(1.0));
+        let fee_schedule = FeeSchedule {
+            taker_fee_bps: 5_001,
             maker_fee_bps: 0,
             rebate_bps: 0,
         };
