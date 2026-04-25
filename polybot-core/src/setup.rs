@@ -35,6 +35,19 @@ fn dashboard_control_auth_configured() -> bool {
         .unwrap_or(false)
 }
 
+fn v2_verification_condition_id() -> Option<String> {
+    std::env::var("POLYBOT_V2_VERIFY_CONDITION_ID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn clob_endpoint() -> String {
+    std::env::var("POLYBOT_CLOB_ENDPOINT")
+        .or_else(|_| std::env::var("CLOB_API_URL"))
+        .unwrap_or_else(|_| "https://clob.polymarket.com".to_string())
+}
+
 pub async fn run_startup_preflight(
     config: &AppConfig,
 ) -> Result<StartupPreflightReport, PolybotError> {
@@ -59,6 +72,21 @@ pub async fn run_startup_preflight(
             "Live mode requires POLYBOT_DASHBOARD_CONTROL_KEY so dashboard pause/resume/emergency-stop routes are authenticated.".to_string(),
         ));
     }
+
+    let condition_id = v2_verification_condition_id().ok_or_else(|| {
+        PolybotError::Config(
+            "Live mode requires POLYBOT_V2_VERIFY_CONDITION_ID so setup-check can verify the real V2 market/fee response shape.".to_string(),
+        )
+    })?;
+    let endpoint = clob_endpoint();
+    let verified_market =
+        crate::execution::v2_market::fetch_and_verify_v2_market_info(&endpoint, &condition_id)
+            .await?;
+    tracing::info!(
+        condition_id = %verified_market.condition_id,
+        token_count = verified_market.token_count,
+        "Verified V2 market info response shape"
+    );
 
     let mut report = StartupPreflightReport {
         execution_mode: config.system.execution_mode,
@@ -151,5 +179,22 @@ mod tests {
 
         std::env::set_var("POLYBOT_DASHBOARD_CONTROL_KEY", "test-control-key");
         assert!(super::dashboard_control_auth_configured());
+    }
+
+    #[test]
+    #[serial]
+    fn v2_verification_condition_id_requires_non_empty_value() {
+        let _guard = EnvVarGuard::new("POLYBOT_V2_VERIFY_CONDITION_ID");
+        std::env::remove_var("POLYBOT_V2_VERIFY_CONDITION_ID");
+        assert!(super::v2_verification_condition_id().is_none());
+
+        std::env::set_var("POLYBOT_V2_VERIFY_CONDITION_ID", "   ");
+        assert!(super::v2_verification_condition_id().is_none());
+
+        std::env::set_var("POLYBOT_V2_VERIFY_CONDITION_ID", "0xabc");
+        assert_eq!(
+            super::v2_verification_condition_id().as_deref(),
+            Some("0xabc")
+        );
     }
 }

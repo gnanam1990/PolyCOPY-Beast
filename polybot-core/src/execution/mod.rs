@@ -6,6 +6,7 @@ pub mod retry;
 pub mod transport;
 pub mod v2_client;
 pub mod v2_flow;
+pub mod v2_market;
 pub mod v2_order;
 pub mod v2_relayer;
 pub mod v2_signing;
