@@ -11,6 +11,12 @@
 
 After deep research into 15+ active open-source repos and the official Polymarket SDK, this bot delivers a realistic, low-latency solution for solo developers running on Windows — with **zero Docker, zero Redis, and zero cloud dependencies**.
 
+## V3.2 Status
+
+The current V3.2 target is simulation-complete CLOB V2. Simulation exercises the V2-shaped order, relayer transaction lifecycle, virtual pUSD accounting, fee-aware routing, and operator visibility without submitting live orders.
+
+Live CLOB V2 submission remains blocked until endpoint response shapes, pUSD wrap/approve/redeem, dashboard control authentication, and full verification are complete.
+
 ### What it does
 - Monitors target wallets in real-time via **WebSocket** + **Data API polling**
 - Auto-executes copy trades with **FOK** or **GTC** orders

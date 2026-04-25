@@ -18,6 +18,18 @@
 | **4** | V2 SDK integration + order builder rewrite — **BLOCKED pending SDK decision** | _not yet written_ | ⏸️ |
 | 5–11 | Relayer client, risk engine rewrite, auto-redeem, Telegram additions, dashboard WS stream, e2e sim | _not yet written_ | ⏸️ |
 
+## Current Milestone
+
+The active milestone is `v3.2 simulation-complete`.
+
+Scope:
+- restore green workspace tests
+- run simulation through a V2-shaped relayer transaction lifecycle
+- add virtual pUSD accounting
+- add fee-aware maker/FOK routing
+- expose V2 state in dashboard and Telegram
+- keep live submission blocked behind an explicit safety gate
+
 ## Key quality signals at end of Phase 3
 
 - `cargo test --workspace`: **231 passed** (33 polybot-common + 198 polybot-core + 0 dashboard), 0 failed
