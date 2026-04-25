@@ -4,6 +4,7 @@ pub mod order_builder;
 pub mod rate_limiter;
 pub mod retry;
 pub mod transport;
+pub mod v2_flow;
 pub mod v2_order;
 pub mod v2_relayer;
 pub mod v2_signing;
