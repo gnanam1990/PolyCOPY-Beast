@@ -132,7 +132,9 @@ mod tests {
     fn sell_fill_fully_exits_to_none() {
         let lot = test_lot();
 
-        let updated = lot.apply_fill(TradeDirection::Sell, dec!(10), dec!(0.70)).unwrap();
+        let updated = lot
+            .apply_fill(TradeDirection::Sell, dec!(10), dec!(0.70))
+            .unwrap();
 
         assert_eq!(updated, None);
     }

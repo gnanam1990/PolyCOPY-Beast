@@ -49,8 +49,32 @@ fn default_use_websocket() -> bool {
     true
 }
 
+fn default_pusd_address() -> String {
+    "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB".to_string()
+}
+
+fn default_collateral_onramp_address() -> String {
+    "0x93070a847efEf7F70739046A929D47a521F5B8ee".to_string()
+}
+
+fn default_collateral_offramp_address() -> String {
+    "0x2957922Eb93258b93368531d39fAcCA3B4dC5854".to_string()
+}
+
+fn default_usdc_e_address() -> String {
+    "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".to_string()
+}
+
 fn default_fok_max_fee_bps() -> u32 {
     50
+}
+
+fn default_paper_starting_balance_usd() -> Decimal {
+    rust_decimal_macros::dec!(1000)
+}
+
+fn default_paper_fixed_entry_price() -> Decimal {
+    rust_decimal_macros::dec!(0.50)
 }
 
 fn default_max_position_politics_usdc() -> Decimal {
@@ -72,6 +96,8 @@ pub struct AppConfig {
     pub risk: RiskConfig,
     pub scanner: ScannerConfig,
     pub execution: ExecutionConfig,
+    #[serde(default)]
+    pub paper: PaperConfig,
     pub telegram: TelegramConfig,
     pub dashboard: DashboardConfig,
     #[serde(default)]
@@ -80,6 +106,7 @@ pub struct AppConfig {
     pub collateral: CollateralConfig,
     #[serde(default)]
     pub builder: Option<BuilderConfig>,
+    #[serde(default)]
     pub reconciliation: ReconciliationConfig,
 }
 
@@ -160,12 +187,28 @@ pub struct ExecutionConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaperConfig {
+    #[serde(default = "default_paper_starting_balance_usd")]
+    pub starting_balance_usd: Decimal,
+    #[serde(default = "default_paper_fixed_entry_price")]
+    pub fixed_entry_price: Decimal,
+}
+
+impl Default for PaperConfig {
+    fn default() -> Self {
+        Self {
+            starting_balance_usd: default_paper_starting_balance_usd(),
+            fixed_entry_price: default_paper_fixed_entry_price(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelegramConfig {
     pub allowed_user_ids: Vec<u64>,
     pub command_rate_limit_per_min: u32,
     pub emergency_stop_limit_per_hour: u32,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardConfig {
@@ -184,19 +227,27 @@ pub struct RelayerConfig {
 pub struct CollateralConfig {
     /// V2 collateral token symbol. Always `"pUSD"` in v3.2.
     pub token: String,
+    #[serde(default = "default_pusd_address")]
+    pub pusd_address: String,
     /// Address of the Collateral Onramp contract (USDC.e → pUSD wrapping).
     /// Empty until provided via COLLATERAL_ONRAMP_ADDRESS env var.
+    #[serde(default = "default_collateral_onramp_address")]
     pub onramp_address: String,
+    #[serde(default = "default_collateral_offramp_address")]
+    pub offramp_address: String,
     /// Polygon USDC.e token address. Defaults to the canonical
     /// 0x2791Bca1... per PRD §6.
+    #[serde(default = "default_usdc_e_address")]
     pub usdc_e_address: String,
 }
 
 fn default_collateral_config() -> CollateralConfig {
     CollateralConfig {
         token: "pUSD".to_string(),
-        onramp_address: String::new(),
-        usdc_e_address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".to_string(),
+        pusd_address: default_pusd_address(),
+        onramp_address: default_collateral_onramp_address(),
+        offramp_address: default_collateral_offramp_address(),
+        usdc_e_address: default_usdc_e_address(),
     }
 }
 
@@ -284,6 +335,7 @@ impl Default for AppConfig {
                 price_buffer: default_price_buffer(),
                 fok_max_fee_bps: default_fok_max_fee_bps(),
             },
+            paper: PaperConfig::default(),
             telegram: TelegramConfig {
                 allowed_user_ids: vec![],
                 command_rate_limit_per_min: 30,
@@ -299,6 +351,12 @@ impl Default for AppConfig {
             reconciliation: ReconciliationConfig::default(),
         }
     }
+}
+
+fn is_hex_address(value: &str) -> bool {
+    value.starts_with("0x")
+        && value.len() == 42
+        && value[2..].chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 impl AppConfig {
@@ -386,6 +444,18 @@ impl AppConfig {
                 "execution.price_buffer must be >= 0".to_string(),
             ));
         }
+        if self.paper.starting_balance_usd <= Decimal::ZERO {
+            return Err(PolybotError::Config(
+                "paper.starting_balance_usd must be > 0".to_string(),
+            ));
+        }
+        if self.paper.fixed_entry_price <= Decimal::ZERO
+            || self.paper.fixed_entry_price > Decimal::ONE
+        {
+            return Err(PolybotError::Config(
+                "paper.fixed_entry_price must be > 0 and <= 1".to_string(),
+            ));
+        }
         if self.scanner.dedup_window_secs == 0 {
             return Err(PolybotError::Config(
                 "dedup_window_secs must be > 0".to_string(),
@@ -400,6 +470,27 @@ impl AppConfig {
             return Err(PolybotError::Config(
                 "signal_max_age_secs must be > 0".to_string(),
             ));
+        }
+        if self.collateral.token != "pUSD" {
+            return Err(PolybotError::Config(
+                "collateral.token must be pUSD for CLOB V2".to_string(),
+            ));
+        }
+        for (name, address) in [
+            ("collateral.pusd_address", &self.collateral.pusd_address),
+            ("collateral.onramp_address", &self.collateral.onramp_address),
+            (
+                "collateral.offramp_address",
+                &self.collateral.offramp_address,
+            ),
+            ("collateral.usdc_e_address", &self.collateral.usdc_e_address),
+        ] {
+            if !is_hex_address(address) {
+                return Err(PolybotError::Config(format!(
+                    "{} must be a 0x-prefixed 20-byte address",
+                    name
+                )));
+            }
         }
         Ok(())
     }
@@ -498,6 +589,16 @@ impl AppConfig {
                 self.execution.price_buffer = d;
             }
         }
+        if let Ok(val) = std::env::var("POLYBOT_PAPER_STARTING_BALANCE_USD") {
+            if let Ok(d) = val.parse::<Decimal>() {
+                self.paper.starting_balance_usd = d;
+            }
+        }
+        if let Ok(val) = std::env::var("POLYBOT_PAPER_FIXED_ENTRY_PRICE") {
+            if let Ok(d) = val.parse::<Decimal>() {
+                self.paper.fixed_entry_price = d;
+            }
+        }
         if let Ok(val) = std::env::var("TELEGRAM_ALLOWED_USER_IDS")
             .or_else(|_| std::env::var("POLYBOT_TELEGRAM_ALLOWED_USER_IDS"))
         {
@@ -532,6 +633,12 @@ impl AppConfig {
 
         if let Ok(val) = std::env::var("COLLATERAL_ONRAMP_ADDRESS") {
             self.collateral.onramp_address = val;
+        }
+        if let Ok(val) = std::env::var("COLLATERAL_OFFRAMP_ADDRESS") {
+            self.collateral.offramp_address = val;
+        }
+        if let Ok(val) = std::env::var("PUSD_ADDRESS") {
+            self.collateral.pusd_address = val;
         }
         if let Ok(val) = std::env::var("USDC_E_ADDRESS") {
             self.collateral.usdc_e_address = val;
@@ -584,6 +691,53 @@ mod tests {
     fn default_config_is_valid() {
         let config = AppConfig::default();
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn legacy_config_without_reconciliation_uses_safe_default() {
+        let raw = r#"
+[system]
+simulation = true
+execution_mode = "simulation"
+log_level = "info"
+
+[risk]
+base_size_usd = 50
+base_size_pct = 0.015
+daily_max_loss_pct = 0.05
+per_market_exposure_pct = 0.10
+per_category_exposure_pct = 0.25
+max_position_size_usd = 500
+max_concurrent_positions = 20
+max_market_liquidity_pct = 0.02
+min_confidence = 6
+min_secret_level = 5
+slippage_threshold = 0.02
+
+[scanner]
+watch_dir = "./signals"
+processed_dir = "./signals/processed"
+dedup_window_secs = 300
+http_port = 8081
+
+[execution]
+slippage_threshold = 0.02
+ws_reconnect_max_wait_secs = 60
+heartbeat_interval_secs = 30
+order_timeout_secs = 30
+
+[telegram]
+allowed_user_ids = []
+command_rate_limit_per_min = 30
+emergency_stop_limit_per_hour = 3
+
+[dashboard]
+host = "0.0.0.0"
+port = 8080
+"#;
+
+        let config: AppConfig = toml::from_str(raw).expect("legacy config should parse");
+        assert!(!config.reconciliation.auto_heal);
     }
 
     #[test]
@@ -671,13 +825,22 @@ mod tests {
     fn relayer_config_parses_from_env() {
         std::env::set_var("RELAYER_URL", "https://relayer-v2.polymarket.com");
         std::env::set_var("RELAYER_API_KEY", "test-api-key");
-        std::env::set_var("RELAYER_API_KEY_ADDRESS", "0x1234567890123456789012345678901234567890");
+        std::env::set_var(
+            "RELAYER_API_KEY_ADDRESS",
+            "0x1234567890123456789012345678901234567890",
+        );
         let mut config = AppConfig::default();
         config.apply_env_overrides();
-        let relayer = config.relayer.as_ref().expect("relayer should be populated");
+        let relayer = config
+            .relayer
+            .as_ref()
+            .expect("relayer should be populated");
         assert_eq!(relayer.url, "https://relayer-v2.polymarket.com");
         assert_eq!(relayer.api_key, "test-api-key");
-        assert_eq!(relayer.api_key_address, "0x1234567890123456789012345678901234567890");
+        assert_eq!(
+            relayer.api_key_address,
+            "0x1234567890123456789012345678901234567890"
+        );
         std::env::remove_var("RELAYER_URL");
         std::env::remove_var("RELAYER_API_KEY");
         std::env::remove_var("RELAYER_API_KEY_ADDRESS");
@@ -691,8 +854,11 @@ mod tests {
         std::env::remove_var("RELAYER_API_KEY_ADDRESS");
         let mut config = AppConfig::default();
         config.apply_env_overrides();
-        assert!(config.relayer.is_none(),
-            "partial relayer config should be None, got {:?}", config.relayer);
+        assert!(
+            config.relayer.is_none(),
+            "partial relayer config should be None, got {:?}",
+            config.relayer
+        );
         std::env::remove_var("RELAYER_URL");
     }
 
@@ -701,23 +867,68 @@ mod tests {
         let config = AppConfig::default();
         assert_eq!(config.collateral.token, "pUSD");
         assert_eq!(
+            config.collateral.pusd_address,
+            "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"
+        );
+        assert_eq!(
+            config.collateral.onramp_address,
+            "0x93070a847efEf7F70739046A929D47a521F5B8ee"
+        );
+        assert_eq!(
+            config.collateral.offramp_address,
+            "0x2957922Eb93258b93368531d39fAcCA3B4dC5854"
+        );
+        assert_eq!(
             config.collateral.usdc_e_address,
             "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
         );
-        assert_eq!(config.collateral.onramp_address, "");
     }
 
     #[test]
     #[serial]
     fn collateral_config_applies_env_overrides() {
-        std::env::set_var("COLLATERAL_ONRAMP_ADDRESS", "0xabcdef0000000000000000000000000000000000");
-        std::env::set_var("USDC_E_ADDRESS", "0x1111111111111111111111111111111111111111");
+        std::env::set_var(
+            "COLLATERAL_ONRAMP_ADDRESS",
+            "0xabcdef0000000000000000000000000000000000",
+        );
+        std::env::set_var(
+            "USDC_E_ADDRESS",
+            "0x1111111111111111111111111111111111111111",
+        );
+        std::env::set_var("PUSD_ADDRESS", "0x2222222222222222222222222222222222222222");
+        std::env::set_var(
+            "COLLATERAL_OFFRAMP_ADDRESS",
+            "0x3333333333333333333333333333333333333333",
+        );
         let mut config = AppConfig::default();
         config.apply_env_overrides();
-        assert_eq!(config.collateral.onramp_address, "0xabcdef0000000000000000000000000000000000");
-        assert_eq!(config.collateral.usdc_e_address, "0x1111111111111111111111111111111111111111");
+        assert_eq!(
+            config.collateral.onramp_address,
+            "0xabcdef0000000000000000000000000000000000"
+        );
+        assert_eq!(
+            config.collateral.pusd_address,
+            "0x2222222222222222222222222222222222222222"
+        );
+        assert_eq!(
+            config.collateral.offramp_address,
+            "0x3333333333333333333333333333333333333333"
+        );
+        assert_eq!(
+            config.collateral.usdc_e_address,
+            "0x1111111111111111111111111111111111111111"
+        );
         std::env::remove_var("COLLATERAL_ONRAMP_ADDRESS");
+        std::env::remove_var("COLLATERAL_OFFRAMP_ADDRESS");
+        std::env::remove_var("PUSD_ADDRESS");
         std::env::remove_var("USDC_E_ADDRESS");
+    }
+
+    #[test]
+    fn collateral_config_rejects_invalid_addresses() {
+        let mut config = AppConfig::default();
+        config.collateral.pusd_address = "not-an-address".to_string();
+        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -733,7 +944,10 @@ mod tests {
         std::env::set_var("BUILDER_CODE", code);
         let mut config = AppConfig::default();
         config.apply_env_overrides();
-        let builder = config.builder.as_ref().expect("builder should be populated");
+        let builder = config
+            .builder
+            .as_ref()
+            .expect("builder should be populated");
         assert_eq!(builder.code, code);
         std::env::remove_var("BUILDER_CODE");
     }
@@ -742,6 +956,38 @@ mod tests {
     fn fok_max_fee_bps_defaults_to_50() {
         let config = AppConfig::default();
         assert_eq!(config.execution.fok_max_fee_bps, 50);
+    }
+
+    #[test]
+    fn paper_defaults_are_safe_for_simulation() {
+        let config = AppConfig::default();
+        assert_eq!(
+            config.paper.starting_balance_usd,
+            rust_decimal_macros::dec!(1000)
+        );
+        assert_eq!(
+            config.paper.fixed_entry_price,
+            rust_decimal_macros::dec!(0.50)
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn paper_config_reads_from_env() {
+        std::env::set_var("POLYBOT_PAPER_STARTING_BALANCE_USD", "2500");
+        std::env::set_var("POLYBOT_PAPER_FIXED_ENTRY_PRICE", "0.42");
+        let mut config = AppConfig::default();
+        config.apply_env_overrides();
+        assert_eq!(
+            config.paper.starting_balance_usd,
+            rust_decimal_macros::dec!(2500)
+        );
+        assert_eq!(
+            config.paper.fixed_entry_price,
+            rust_decimal_macros::dec!(0.42)
+        );
+        std::env::remove_var("POLYBOT_PAPER_STARTING_BALANCE_USD");
+        std::env::remove_var("POLYBOT_PAPER_FIXED_ENTRY_PRICE");
     }
 
     #[test]
@@ -757,10 +1003,22 @@ mod tests {
     #[test]
     fn category_caps_default_to_prd_values() {
         let config = AppConfig::default();
-        assert_eq!(config.risk.max_position_politics_usdc, rust_decimal_macros::dec!(250));
-        assert_eq!(config.risk.max_position_crypto_usdc, rust_decimal_macros::dec!(150));
-        assert_eq!(config.risk.max_position_sports_usdc, rust_decimal_macros::dec!(200));
-        assert_eq!(config.risk.max_position_other_usdc, rust_decimal_macros::dec!(100));
+        assert_eq!(
+            config.risk.max_position_politics_usdc,
+            rust_decimal_macros::dec!(250)
+        );
+        assert_eq!(
+            config.risk.max_position_crypto_usdc,
+            rust_decimal_macros::dec!(150)
+        );
+        assert_eq!(
+            config.risk.max_position_sports_usdc,
+            rust_decimal_macros::dec!(200)
+        );
+        assert_eq!(
+            config.risk.max_position_other_usdc,
+            rust_decimal_macros::dec!(100)
+        );
     }
 
     #[test]
@@ -770,11 +1028,23 @@ mod tests {
         std::env::set_var("MAX_POSITION_CRYPTO_USDC", "300");
         let mut config = AppConfig::default();
         config.apply_env_overrides();
-        assert_eq!(config.risk.max_position_politics_usdc, rust_decimal_macros::dec!(500));
-        assert_eq!(config.risk.max_position_crypto_usdc, rust_decimal_macros::dec!(300));
+        assert_eq!(
+            config.risk.max_position_politics_usdc,
+            rust_decimal_macros::dec!(500)
+        );
+        assert_eq!(
+            config.risk.max_position_crypto_usdc,
+            rust_decimal_macros::dec!(300)
+        );
         // Unchanged defaults for the others.
-        assert_eq!(config.risk.max_position_sports_usdc, rust_decimal_macros::dec!(200));
-        assert_eq!(config.risk.max_position_other_usdc, rust_decimal_macros::dec!(100));
+        assert_eq!(
+            config.risk.max_position_sports_usdc,
+            rust_decimal_macros::dec!(200)
+        );
+        assert_eq!(
+            config.risk.max_position_other_usdc,
+            rust_decimal_macros::dec!(100)
+        );
         std::env::remove_var("MAX_POSITION_POLITICS_USDC");
         std::env::remove_var("MAX_POSITION_CRYPTO_USDC");
     }

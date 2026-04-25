@@ -42,6 +42,10 @@ heartbeat_interval_secs = 30
 order_timeout_secs = 30
 price_buffer = 0.01
 
+[paper]
+starting_balance_usd = 1000
+fixed_entry_price = 0.50
+
 [telegram]
 allowed_user_ids = []
 command_rate_limit_per_min = 30
@@ -54,3 +58,13 @@ url = "redis://127.0.0.1:6379"
 [dashboard]
 host = "0.0.0.0"
 port = 8080
+
+[collateral]
+token = "pUSD"
+pusd_address = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"
+onramp_address = "0x93070a847efEf7F70739046A929D47a521F5B8ee"
+offramp_address = "0x2957922Eb93258b93368531d39fAcCA3B4dC5854"
+usdc_e_address = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+
+[reconciliation]
+auto_heal = false

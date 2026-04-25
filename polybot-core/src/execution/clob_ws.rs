@@ -1,12 +1,12 @@
-use polybot_common::errors::PolybotError;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::str::FromStr as _;
 use futures::StreamExt as _;
+use polybot_common::errors::PolybotError;
 use polymarket_client_sdk::clob::ws::Client as WsClient;
 use polymarket_client_sdk::types::U256;
 use polymarket_client_sdk::ws::config::Config as WsConfig;
+use std::collections::HashMap;
+use std::str::FromStr as _;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
 
@@ -105,7 +105,11 @@ pub struct ClobWsManager {
 }
 
 impl ClobWsManager {
-    pub fn new(config: ClobConfig, metrics: Arc<Metrics>, alerts: Option<AlertBroadcaster>) -> Self {
+    pub fn new(
+        config: ClobConfig,
+        metrics: Arc<Metrics>,
+        alerts: Option<AlertBroadcaster>,
+    ) -> Self {
         Self {
             config,
             subscribed_tokens: Arc::new(RwLock::new(Vec::new())),

@@ -2,6 +2,27 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::SystemTime;
 use tokio::sync::broadcast;
 
+fn decimal_to_cents(value: rust_decimal::Decimal) -> i64 {
+    use rust_decimal::prelude::ToPrimitive;
+    let Some(scaled) = value
+        .checked_mul(rust_decimal::Decimal::new(100, 0))
+        .map(|value| value.round())
+    else {
+        return if value < rust_decimal::Decimal::ZERO {
+            i64::MIN
+        } else {
+            i64::MAX
+        };
+    };
+    scaled.to_i64().unwrap_or_else(|| {
+        if scaled < rust_decimal::Decimal::ZERO {
+            i64::MIN
+        } else {
+            i64::MAX
+        }
+    })
+}
+
 /// Shared metrics state accessible from all modules.
 /// Updated atomically by scanner, risk, execution, and state modules.
 /// Read by health/metrics endpoints and Telegram commands.
@@ -25,6 +46,10 @@ pub struct Metrics {
 
     // PnL (stored as cents to use atomic u64 — divide by 100 for USD)
     pub daily_pnl_cents: AtomicI64,
+    pub virtual_pusd_cents: AtomicI64,
+    pub reserved_pusd_cents: AtomicI64,
+    pub fees_paid_cents: AtomicI64,
+    pub rebates_earned_cents: AtomicI64,
     pub total_pnl_cents: AtomicI64,
 
     // Risk state
@@ -36,10 +61,10 @@ pub struct Metrics {
     pub max_latency_us: AtomicU64,
 
     // Connection state
-    pub ws_connected: AtomicU64,    // 0 = disconnected, 1 = connected
-    pub rpc_healthy: AtomicU64,     // 0 = unhealthy, 1 = healthy
+    pub ws_connected: AtomicU64,        // 0 = disconnected, 1 = connected
+    pub rpc_healthy: AtomicU64,         // 0 = unhealthy, 1 = healthy
     pub data_api_latency_ms: AtomicU64, // last known Data API latency in ms
-    pub paused: AtomicU64,          // 0 = active, 1 = paused
+    pub paused: AtomicU64,              // 0 = active, 1 = paused
 
     // Event broadcast for real-time dashboard streaming
     pub event_tx: std::sync::Mutex<Option<broadcast::Sender<String>>>,
@@ -63,6 +88,10 @@ impl Metrics {
             total_positions_opened: AtomicU64::new(0),
             total_positions_closed: AtomicU64::new(0),
             daily_pnl_cents: AtomicI64::new(0),
+            virtual_pusd_cents: AtomicI64::new(0),
+            reserved_pusd_cents: AtomicI64::new(0),
+            fees_paid_cents: AtomicI64::new(0),
+            rebates_earned_cents: AtomicI64::new(0),
             total_pnl_cents: AtomicI64::new(0),
             current_drawdown_bps: AtomicU64::new(0),
             emergency_stops_triggered: AtomicU64::new(0),
@@ -134,6 +163,39 @@ impl Metrics {
         self.daily_pnl_cents.store(cents, Ordering::Relaxed);
     }
 
+    pub fn update_v2_accounting(
+        &self,
+        virtual_pusd: rust_decimal::Decimal,
+        reserved_pusd: rust_decimal::Decimal,
+        fees_paid: rust_decimal::Decimal,
+        rebates_earned: rust_decimal::Decimal,
+    ) {
+        self.virtual_pusd_cents
+            .store(decimal_to_cents(virtual_pusd), Ordering::Relaxed);
+        self.reserved_pusd_cents
+            .store(decimal_to_cents(reserved_pusd), Ordering::Relaxed);
+        self.fees_paid_cents
+            .store(decimal_to_cents(fees_paid), Ordering::Relaxed);
+        self.rebates_earned_cents
+            .store(decimal_to_cents(rebates_earned), Ordering::Relaxed);
+    }
+
+    pub fn virtual_pusd(&self) -> f64 {
+        self.virtual_pusd_cents.load(Ordering::Relaxed) as f64 / 100.0
+    }
+
+    pub fn reserved_pusd(&self) -> f64 {
+        self.reserved_pusd_cents.load(Ordering::Relaxed) as f64 / 100.0
+    }
+
+    pub fn fees_paid(&self) -> f64 {
+        self.fees_paid_cents.load(Ordering::Relaxed) as f64 / 100.0
+    }
+
+    pub fn rebates_earned(&self) -> f64 {
+        self.rebates_earned_cents.load(Ordering::Relaxed) as f64 / 100.0
+    }
+
     /// Update drawdown (in basis points, e.g. 5% = 500 bps)
     pub fn update_drawdown(&self, drawdown_pct: f64) {
         let bps = (drawdown_pct * 10000.0) as u64;
@@ -178,7 +240,6 @@ impl Metrics {
             .store(if healthy { 1 } else { 0 }, Ordering::Relaxed);
     }
 
-
     pub fn set_paused(&self, paused: bool) {
         self.paused
             .store(if paused { 1 } else { 0 }, Ordering::Relaxed);
@@ -214,11 +275,7 @@ impl Metrics {
     }
 
     /// Broadcast a JSON event string to dashboard WebSocket clients (fire-and-forget)
-    pub fn broadcast_event(
-        &self,
-        event_type: &str,
-        payload: serde_json::Value,
-    ) {
+    pub fn broadcast_event(&self, event_type: &str, payload: serde_json::Value) {
         if let Ok(guard) = self.event_tx.lock() {
             if let Some(ref tx) = *guard {
                 let msg = serde_json::json!({
@@ -284,6 +341,27 @@ mod tests {
         let m = Metrics::new();
         m.update_daily_pnl(-12.34);
         assert!((m.daily_pnl_usd() + 12.34).abs() < 0.01);
+    }
+
+    #[test]
+    fn v2_accounting_metrics_round_trip() {
+        let m = Metrics::new();
+        m.update_v2_accounting(
+            rust_decimal::Decimal::new(12345, 2),
+            rust_decimal::Decimal::new(2500, 2),
+            rust_decimal::Decimal::new(15, 2),
+            rust_decimal::Decimal::new(7, 2),
+        );
+        assert!((m.virtual_pusd() - 123.45).abs() < 0.01);
+        assert!((m.reserved_pusd() - 25.00).abs() < 0.01);
+        assert!((m.fees_paid() - 0.15).abs() < 0.01);
+        assert!((m.rebates_earned() - 0.07).abs() < 0.01);
+    }
+
+    #[test]
+    fn decimal_to_cents_saturates_on_overflow() {
+        assert_eq!(decimal_to_cents(rust_decimal::Decimal::MAX), i64::MAX);
+        assert_eq!(decimal_to_cents(rust_decimal::Decimal::MIN), i64::MIN);
     }
 
     #[test]

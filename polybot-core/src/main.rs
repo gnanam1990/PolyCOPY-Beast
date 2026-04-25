@@ -10,8 +10,8 @@ mod setup;
 mod state;
 mod telegram_bot;
 
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::{mpsc, RwLock};
 
@@ -38,14 +38,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let setup_only = std::env::args().any(|arg| arg == "--setup-check");
     let preflight = setup::run_startup_preflight(&config).await?;
 
+    let preflight_summary = preflight.summary();
     tracing::info!(
         simulation = config.system.simulation,
-        preflight = %preflight.summary(),
+        preflight = %preflight_summary,
         "SuperFast PolyBot v3 starting"
     );
 
     if setup_only {
-        tracing::info!("Startup preflight completed successfully; exiting because --setup-check was requested");
+        println!("Startup preflight completed successfully: {preflight_summary}");
+        tracing::info!(
+            "Startup preflight completed successfully; exiting because --setup-check was requested"
+        );
         return Ok(());
     }
 
@@ -54,19 +58,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let config = Arc::new(config);
-    let sqlite_path = std::env::var("POLYBOT_SQLITE_PATH").unwrap_or_else(|_| "./polybot.db".to_string());
+    let sqlite_path =
+        std::env::var("POLYBOT_SQLITE_PATH").unwrap_or_else(|_| "./polybot.db".to_string());
     let (alert_tx, alert_rx) = tokio::sync::mpsc::unbounded_channel();
     let alert_broadcaster = telegram_bot::alerts::AlertBroadcaster::new(alert_tx);
 
     // Shared metrics — accessible from all subsystems
     let metrics = Arc::new(metrics::Metrics::new());
+    metrics.update_v2_accounting(
+        config.paper.starting_balance_usd,
+        rust_decimal::Decimal::ZERO,
+        rust_decimal::Decimal::ZERO,
+        rust_decimal::Decimal::ZERO,
+    );
     let position_manager = Arc::new(tokio::sync::Mutex::new(
         state::positions::PositionManager::new(),
     ));
 
     if let Ok(store) = state::sqlite::SqliteStore::open(std::path::Path::new(&sqlite_path)) {
-        if let Err(e) = state::recover_from_sqlite(&store, metrics.clone(), position_manager.clone()).await {
+        if let Err(e) =
+            state::recover_from_sqlite(&store, metrics.clone(), position_manager.clone()).await
+        {
             tracing::error!(error = %e, "Failed to recover state from SQLite");
+        } else {
+            let recovered_exposure = position_manager.lock().await.total_exposure();
+            let recovered_available = (config.paper.starting_balance_usd - recovered_exposure)
+                .max(rust_decimal::Decimal::ZERO);
+            metrics.update_v2_accounting(
+                recovered_available,
+                rust_decimal::Decimal::ZERO,
+                rust_decimal::Decimal::ZERO,
+                rust_decimal::Decimal::ZERO,
+            );
         }
     }
 
@@ -80,7 +103,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(store) = state::sqlite::SqliteStore::open(std::path::Path::new(&sqlite_path)) {
         // Seed wallets from env configuration (POLYBOT_TARGET_WALLETS)
         for wallet in &config.scanner.target_wallets {
-            if let Err(e) = store.upsert_target(wallet, None, &config.scanner.target_categories, None) {
+            if let Err(e) =
+                store.upsert_target(wallet, None, &config.scanner.target_categories, None)
+            {
                 tracing::error!(error = %e, wallet = %wallet, "Failed to seed env-configured target wallet");
             } else {
                 tracing::info!(wallet = %wallet, "Seeded env-configured target wallet");
@@ -89,30 +114,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if let Ok(targets) = store.list_active_targets() {
             for target in targets {
-                let _ = risk_engine.add_followed_wallet(&target.wallet_address).await;
+                let _ = risk_engine
+                    .add_followed_wallet(&target.wallet_address)
+                    .await;
             }
         }
 
         for wallet in risk_engine.list_followed_wallets().await {
-            if let Err(e) = store.upsert_target(
-                &wallet,
-                None,
-                &config.scanner.target_categories,
-                None,
-            ) {
+            if let Err(e) =
+                store.upsert_target(&wallet, None, &config.scanner.target_categories, None)
+            {
                 tracing::error!(error = %e, wallet = %wallet, "Failed to persist followed wallet to SQLite targets table");
             }
         }
     }
 
-    let reconciler = Arc::new(state::reconciliation::Reconciler::new(
-        config.clone(),
-        metrics.clone(),
-        position_manager.clone(),
-        config.reconciliation.auto_heal,
-    ).with_alerts(Some(alert_broadcaster.clone())));
+    let reconciler = Arc::new(
+        state::reconciliation::Reconciler::new(
+            config.clone(),
+            metrics.clone(),
+            position_manager.clone(),
+            config.reconciliation.auto_heal,
+        )
+        .with_alerts(Some(alert_broadcaster.clone())),
+    );
     let market_prices = Arc::new(RwLock::new(HashMap::new()));
-    let wallet_activity_state = Arc::new(RwLock::new(scanner::wallet_tracker::WalletActivityState::default()));
+    let wallet_activity_state = Arc::new(RwLock::new(
+        scanner::wallet_tracker::WalletActivityState::default(),
+    ));
 
     // Create channels
     // Scanner -> Dedup -> Risk -> Execution -> State
@@ -131,11 +160,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         paused: false,
         metrics: metrics.clone(),
         sqlite_path: sqlite_path.clone(),
-        starting_balance: if config.risk.base_size_pct > rust_decimal::Decimal::ZERO {
-            config.risk.base_size_usd / config.risk.base_size_pct
-        } else {
-            config.risk.base_size_usd
-        },
+        starting_balance: config.paper.starting_balance_usd,
+        fixed_entry_price: config.paper.fixed_entry_price,
         risk_engine: risk_engine.clone(),
         position_manager: position_manager.clone(),
         event_tx: event_tx.clone(),
@@ -162,7 +188,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let poller_handle = tokio::spawn(async move {
         match scanner::data_api::DataApiPoller::new(&poller_config, poller_state, poller_metrics) {
             Ok(poller) => {
-                if let Err(e) = poller.run(poller_risk, poller_signal_tx, wallet_trigger_rx).await {
+                if let Err(e) = poller
+                    .run(poller_risk, poller_signal_tx, wallet_trigger_rx)
+                    .await
+                {
                     tracing::error!(error = %e, "Data API poller failed");
                 }
             }
@@ -227,15 +256,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state_positions = position_manager.clone();
     let state_market_prices = market_prices.clone();
     let state_handle = tokio::spawn(async move {
-        if let Err(e) =
-            state::run_state_manager(
-                state_config,
-                state_metrics,
-                state_positions,
-                state_market_prices,
-                trade_rx,
-            )
-            .await
+        if let Err(e) = state::run_state_manager(
+            state_config,
+            state_metrics,
+            state_positions,
+            state_market_prices,
+            trade_rx,
+        )
+        .await
         {
             tracing::error!(error = %e, "State manager failed");
         }
@@ -259,7 +287,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-
     // Spawn health/metrics server
     let health_state_clone = health_state.clone();
     let health_port = config.dashboard.port;
@@ -275,16 +302,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tg_reconciler = reconciler.clone();
     let tg_metrics = metrics.clone();
     let tg_handle = tokio::spawn(async move {
-        if let Err(e) =
-            telegram_bot::start_telegram_bot(
-                tg_config,
-                tg_risk,
-                tg_reconciler,
-                tg_metrics,
-                position_manager.clone(),
-                alert_rx,
-            )
-                .await
+        if let Err(e) = telegram_bot::start_telegram_bot(
+            tg_config,
+            tg_risk,
+            tg_reconciler,
+            tg_metrics,
+            position_manager.clone(),
+            alert_rx,
+        )
+        .await
         {
             tracing::warn!(error = %e, "Telegram bot not started (token may not be configured)");
         }

@@ -1,8 +1,56 @@
+use crate::data::{
+    self, market_link, HealthData, MetricsData, PositionData, SignalData, TransactionData,
+};
 use leptos::prelude::*;
 use leptos_meta::*;
-use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
-use crate::data::{self, HealthData, MetricsData, PositionData, SignalData, market_link};
+use wasm_bindgen::JsCast;
+
+const CONTROL_KEY_STORAGE: &str = "polybot_control_key";
+const CONTROL_KEY_HEADER: &str = "X-PolyBot-Control-Key";
+
+fn stored_control_key() -> Option<String> {
+    gloo_utils::window()
+        .local_storage()
+        .ok()
+        .flatten()
+        .and_then(|storage| storage.get_item(CONTROL_KEY_STORAGE).ok().flatten())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn prompt_for_control_key() -> Option<String> {
+    if let Some(key) = stored_control_key() {
+        return Some(key);
+    }
+
+    let key = gloo_utils::window()
+        .prompt_with_message("Enter dashboard control key")
+        .ok()
+        .flatten()?
+        .trim()
+        .to_string();
+    if key.is_empty() {
+        return None;
+    }
+
+    if let Ok(Some(storage)) = gloo_utils::window().local_storage() {
+        let _ = storage.set_item(CONTROL_KEY_STORAGE, &key);
+    }
+    Some(key)
+}
+
+async fn post_control(path: &str) -> Result<gloo_net::http::Response, String> {
+    let Some(key) = prompt_for_control_key() else {
+        return Err("Dashboard control key required.".to_string());
+    };
+
+    gloo_net::http::Request::post(path)
+        .header(CONTROL_KEY_HEADER, &key)
+        .send()
+        .await
+        .map_err(|e| format!("Control request failed: {}", e))
+}
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -27,10 +75,16 @@ pub fn App() -> impl IntoView {
         let refresh_clone = refresh;
         wasm_bindgen_futures::spawn_local(async move {
             let window = gloo_utils::window();
-            let Ok(host) = window.location().host() else { return; };
-            let Ok(proto) = window.location().protocol() else { return; };
+            let Ok(host) = window.location().host() else {
+                return;
+            };
+            let Ok(proto) = window.location().protocol() else {
+                return;
+            };
             let proto = if proto == "https:" { "wss" } else { "ws" };
-            let Ok(ws) = web_sys::WebSocket::new(&format!("{}://{}/ws", proto, host)) else { return; };
+            let Ok(ws) = web_sys::WebSocket::new(&format!("{}://{}/ws", proto, host)) else {
+                return;
+            };
             let onmessage = Closure::<dyn FnMut(web_sys::MessageEvent)>::new({
                 let refresh = refresh_clone;
                 move |e: web_sys::MessageEvent| {
@@ -60,11 +114,24 @@ pub fn App() -> impl IntoView {
         let _ = refresh.get();
         async move { data::fetch_signals(12).await.unwrap_or_default() }
     });
+    let transactions_res = LocalResource::new(move || {
+        let _ = refresh.get();
+        async move { data::fetch_transactions(10).await.unwrap_or_default() }
+    });
 
     let health_sig = Signal::derive(move || health_res.get().as_deref().cloned().flatten());
     let metrics_sig = Signal::derive(move || metrics_res.get().as_deref().cloned().flatten());
-    let positions_sig = Signal::derive(move || positions_res.get().as_deref().cloned().unwrap_or_default());
-    let signals_sig = Signal::derive(move || signals_res.get().as_deref().cloned().unwrap_or_default());
+    let positions_sig =
+        Signal::derive(move || positions_res.get().as_deref().cloned().unwrap_or_default());
+    let signals_sig =
+        Signal::derive(move || signals_res.get().as_deref().cloned().unwrap_or_default());
+    let transactions_sig = Signal::derive(move || {
+        transactions_res
+            .get()
+            .as_deref()
+            .cloned()
+            .unwrap_or_default()
+    });
 
     view! {
         <Stylesheet id="leptos" href="/style.css"/>
@@ -88,6 +155,7 @@ pub fn App() -> impl IntoView {
                                     metrics=metrics_sig
                                     positions=positions_sig
                                     signals=signals_sig
+                                    transactions=transactions_sig
                                     refresh=refresh
                                 />
                             }.into_any()
@@ -100,10 +168,19 @@ pub fn App() -> impl IntoView {
 }
 
 #[component]
-fn Sidebar(active_tab: ReadSignal<&'static str>, active_set: WriteSignal<&'static str>) -> impl IntoView {
+fn Sidebar(
+    active_tab: ReadSignal<&'static str>,
+    active_set: WriteSignal<&'static str>,
+) -> impl IntoView {
     let nav_item = |label: &'static str, tab: &'static str, icon: &'static str| {
         let is_active = move || active_tab.get() == tab;
-        let cls = move || if is_active() { "nav-item active" } else { "nav-item" };
+        let cls = move || {
+            if is_active() {
+                "nav-item active"
+            } else {
+                "nav-item"
+            }
+        };
         view! {
             <button class=cls on:click=move |_| active_set.set(tab)>
                 <span class="nav-icon">{icon}</span>
@@ -173,6 +250,7 @@ fn DashboardTab(
     metrics: Signal<Option<MetricsData>>,
     positions: Signal<Vec<PositionData>>,
     signals: Signal<Vec<SignalData>>,
+    transactions: Signal<Vec<TransactionData>>,
     refresh: RwSignal<u32>,
 ) -> impl IntoView {
     let (toast_msg, set_toast_msg) = signal(String::new());
@@ -182,37 +260,57 @@ fn DashboardTab(
         let _ = refresh.get();
         async move { data::fetch_daily_stats().await.unwrap_or_default() }
     });
-    let stats_sig = Signal::derive(move || daily_stats_res.get().as_deref().cloned().unwrap_or_default());
-
-    let pause_action = Action::new_local(move |_: &()| {
-        async move {
-            match gloo_net::http::Request::post("/health/control/pause").send().await {
-                Ok(r) if r.ok() => { set_toast_msg.set("Trading paused.".into()); set_toast_ok.set(true); }
-                _ => { set_toast_msg.set("Pause request failed.".into()); set_toast_ok.set(false); }
-            }
-            refresh.update(|n| *n += 1);
-        }
+    let stats_sig = Signal::derive(move || {
+        daily_stats_res
+            .get()
+            .as_deref()
+            .cloned()
+            .unwrap_or_default()
     });
 
-    let resume_action = Action::new_local(move |_: &()| {
-        async move {
-            match gloo_net::http::Request::post("/health/control/resume").send().await {
-                Ok(r) if r.ok() => { set_toast_msg.set("Trading resumed.".into()); set_toast_ok.set(true); }
-                _ => { set_toast_msg.set("Resume failed — check cooldown.".into()); set_toast_ok.set(false); }
+    let pause_action = Action::new_local(move |_: &()| async move {
+        match post_control("/health/control/pause").await {
+            Ok(r) if r.ok() => {
+                set_toast_msg.set("Trading paused.".into());
+                set_toast_ok.set(true);
             }
-            refresh.update(|n| *n += 1);
+            _ => {
+                set_toast_msg.set("Pause request failed.".into());
+                set_toast_ok.set(false);
+            }
         }
+        refresh.update(|n| *n += 1);
     });
 
-    let estop_action = Action::new_local(move |_: &()| {
-        async move {
-            if let Ok(true) = gloo_utils::window().confirm_with_message("EMERGENCY STOP: This will flatten all open positions immediately. Are you sure?") {
-                match gloo_net::http::Request::post("/health/control/emergency-stop").send().await {
-                    Ok(r) if r.ok() => { set_toast_msg.set("Emergency Stop executed.".into()); set_toast_ok.set(true); }
-                    _ => { set_toast_msg.set("Emergency Stop failed.".into()); set_toast_ok.set(false); }
+    let resume_action = Action::new_local(move |_: &()| async move {
+        match post_control("/health/control/resume").await {
+            Ok(r) if r.ok() => {
+                set_toast_msg.set("Trading resumed.".into());
+                set_toast_ok.set(true);
+            }
+            _ => {
+                set_toast_msg.set("Resume failed — check cooldown.".into());
+                set_toast_ok.set(false);
+            }
+        }
+        refresh.update(|n| *n += 1);
+    });
+
+    let estop_action = Action::new_local(move |_: &()| async move {
+        if let Ok(true) = gloo_utils::window().confirm_with_message(
+            "EMERGENCY STOP: This will flatten all open positions immediately. Are you sure?",
+        ) {
+            match post_control("/health/control/emergency-stop").await {
+                Ok(r) if r.ok() => {
+                    set_toast_msg.set("Emergency Stop executed.".into());
+                    set_toast_ok.set(true);
                 }
-                refresh.update(|n| *n += 1);
+                _ => {
+                    set_toast_msg.set("Emergency Stop failed.".into());
+                    set_toast_ok.set(false);
+                }
             }
+            refresh.update(|n| *n += 1);
         }
     });
 
@@ -230,6 +328,20 @@ fn DashboardTab(
                         let dd_f: f64 = dd.parse().unwrap_or(0.0);
                         let cls = if dd_f > 0.0 { "change neg" } else { "change pos" };
                         view! { <span class=cls>{format!("{}% Drawdown", dd_f)}</span> }
+                    }}
+                </div>
+            </div>
+
+            <div class="card fade-in">
+                <div class="card-header">
+                    <span class="card-title">"Virtual pUSD"</span>
+                    <div class="card-icon cyan">"V2"</div>
+                </div>
+                <div class="card-value">{move || health.get().map(|h| format!("${}", h.virtual_pusd)).unwrap_or_else(|| "-".into())}</div>
+                <div class="card-sub">
+                    {move || {
+                        let reserved = health.get().map(|h| h.reserved_pusd).unwrap_or_else(|| "-".into());
+                        view! { <span class="change pos">{format!("reserved ${}", reserved)}</span> }
                     }}
                 </div>
             </div>
@@ -512,6 +624,16 @@ fn DashboardTab(
                 </div>
                 <SignalsTable data=signals />
             </div>
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">"Relayer Queue"</span>
+                    {move || {
+                        let count = transactions.get().len();
+                        view! { <span style="font-size: 0.8rem; color: var(--text-tertiary); font-weight: 600;">{format!("{} Items", count)}</span> }
+                    }}
+                </div>
+                <TransactionsTable data=transactions />
+            </div>
         </section>
     }
 }
@@ -702,6 +824,54 @@ fn SignalsTable(data: Signal<Vec<SignalData>>) -> impl IntoView {
                                             <td class="td-mono">{s.secret_level.to_string()}</td>
                                             <td>{cat_tag}</td>
                                             <td>{disp_tag}</td>
+                                        </tr>
+                                    }
+                                }).collect_view()}
+                            </tbody>
+                        </table>
+                    </div>
+                }.into_any()
+            }
+        }}
+    }
+}
+
+#[component]
+fn TransactionsTable(data: Signal<Vec<TransactionData>>) -> impl IntoView {
+    view! {
+        {move || {
+            let rows = data.get();
+            if rows.is_empty() {
+                view! {
+                    <div class="empty-state">
+                        <span style="font-size: 2rem; opacity: 0.2;">"V2"</span>
+                        <p>"No relayer transactions"</p>
+                    </div>
+                }.into_any()
+            } else {
+                view! {
+                    <div style="overflow-x: auto;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>"Transaction"</th>
+                                    <th>"State"</th>
+                                    <th>"Hash"</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {rows.into_iter().map(|txn| {
+                                    let state_tag = match txn.state.as_str() {
+                                        "STATE_SUCCESS" => view! { <span class="tag tag-open">{txn.state}</span> }.into_any(),
+                                        "STATE_FAILED" => view! { <span class="tag tag-closed">{txn.state}</span> }.into_any(),
+                                        _ => view! { <span class="tag tag-other">{txn.state}</span> }.into_any(),
+                                    };
+                                    let hash = txn.transaction_hash.unwrap_or_else(|| "-".into());
+                                    view! {
+                                        <tr class="fade-in">
+                                            <td class="td-mono">{txn.transaction_id}</td>
+                                            <td>{state_tag}</td>
+                                            <td class="td-mono" style="max-width: 160px; overflow: hidden; text-overflow: ellipsis;">{hash}</td>
                                         </tr>
                                     }
                                 }).collect_view()}

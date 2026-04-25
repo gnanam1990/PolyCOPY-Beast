@@ -170,6 +170,10 @@ fn default_trade_direction() -> TradeDirection {
     TradeDirection::Buy
 }
 
+fn default_source_wallet() -> String {
+    String::new()
+}
+
 /// Signal schema (v2.5 base with Module 1 extensions for core fields).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Signal {
@@ -409,10 +413,12 @@ impl PositionKey {
 pub struct Trade {
     pub id: String,
     pub signal_id: String,
+    #[serde(default = "default_source_wallet")]
     pub source_wallet: String,
     pub market_id: String,
     pub category: Category,
     pub side: Side,
+    #[serde(default = "default_trade_direction")]
     pub direction: TradeDirection,
     pub price: Decimal,
     pub size: Decimal,
@@ -502,15 +508,29 @@ pub enum TransactionState {
     Pending,
     #[serde(rename = "STATE_SUBMITTED")]
     Submitted,
+    #[serde(rename = "STATE_EXECUTED")]
+    Executed,
+    #[serde(rename = "STATE_MINED")]
+    Mined,
     #[serde(rename = "STATE_SUCCESS")]
     Success,
+    #[serde(rename = "STATE_CONFIRMED")]
+    Confirmed,
     #[serde(rename = "STATE_FAILED")]
     Failed,
+    #[serde(rename = "STATE_INVALID")]
+    Invalid,
 }
 
 impl TransactionState {
     pub fn is_terminal(&self) -> bool {
-        matches!(self, TransactionState::Success | TransactionState::Failed)
+        matches!(
+            self,
+            TransactionState::Success
+                | TransactionState::Confirmed
+                | TransactionState::Failed
+                | TransactionState::Invalid
+        )
     }
 
     pub fn as_sqlite_str(&self) -> &'static str {
@@ -518,8 +538,12 @@ impl TransactionState {
             TransactionState::New => "STATE_NEW",
             TransactionState::Pending => "STATE_PENDING",
             TransactionState::Submitted => "STATE_SUBMITTED",
+            TransactionState::Executed => "STATE_EXECUTED",
+            TransactionState::Mined => "STATE_MINED",
             TransactionState::Success => "STATE_SUCCESS",
+            TransactionState::Confirmed => "STATE_CONFIRMED",
             TransactionState::Failed => "STATE_FAILED",
+            TransactionState::Invalid => "STATE_INVALID",
         }
     }
 }
@@ -532,6 +556,7 @@ pub enum TransactionKind {
     Order,
     Cancel,
     Wrap,
+    Unwrap,
     Approve,
     Redeem,
     Deploy,
@@ -543,6 +568,7 @@ impl TransactionKind {
             TransactionKind::Order => "order",
             TransactionKind::Cancel => "cancel",
             TransactionKind::Wrap => "wrap",
+            TransactionKind::Unwrap => "unwrap",
             TransactionKind::Approve => "approve",
             TransactionKind::Redeem => "redeem",
             TransactionKind::Deploy => "deploy",
@@ -808,7 +834,11 @@ mod tests {
 
     #[test]
     fn fee_schedule_converts_bps_hundredths_to_bps() {
-        let fs = FeeSchedule { taker_fee_bps: 12500, maker_fee_bps: 0, rebate_bps: 2500 };
+        let fs = FeeSchedule {
+            taker_fee_bps: 12500,
+            maker_fee_bps: 0,
+            rebate_bps: 2500,
+        };
         assert_eq!(fs.taker_bps_true(), 125);
         assert_eq!(fs.maker_bps_true(), 0);
         assert_eq!(fs.rebate_bps_true(), 25);
@@ -816,7 +846,11 @@ mod tests {
 
     #[test]
     fn fee_schedule_serializes_with_camel_case_keys() {
-        let fs = FeeSchedule { taker_fee_bps: 500, maker_fee_bps: 0, rebate_bps: 100 };
+        let fs = FeeSchedule {
+            taker_fee_bps: 500,
+            maker_fee_bps: 0,
+            rebate_bps: 100,
+        };
         let s = serde_json::to_string(&fs).unwrap();
         assert!(s.contains("\"takerFee\":500"), "got: {}", s);
         assert!(s.contains("\"makerFee\":0"), "got: {}", s);
@@ -829,8 +863,12 @@ mod tests {
             TransactionState::New,
             TransactionState::Pending,
             TransactionState::Submitted,
+            TransactionState::Executed,
+            TransactionState::Mined,
             TransactionState::Success,
+            TransactionState::Confirmed,
             TransactionState::Failed,
+            TransactionState::Invalid,
         ];
         for s in states {
             let j = serde_json::to_string(&s).unwrap();
@@ -845,8 +883,12 @@ mod tests {
             ("\"STATE_NEW\"", TransactionState::New),
             ("\"STATE_PENDING\"", TransactionState::Pending),
             ("\"STATE_SUBMITTED\"", TransactionState::Submitted),
+            ("\"STATE_EXECUTED\"", TransactionState::Executed),
+            ("\"STATE_MINED\"", TransactionState::Mined),
             ("\"STATE_SUCCESS\"", TransactionState::Success),
+            ("\"STATE_CONFIRMED\"", TransactionState::Confirmed),
             ("\"STATE_FAILED\"", TransactionState::Failed),
+            ("\"STATE_INVALID\"", TransactionState::Invalid),
         ];
         for (wire, expected) in cases {
             let parsed: TransactionState = serde_json::from_str(wire).unwrap();
@@ -859,8 +901,12 @@ mod tests {
         assert!(!TransactionState::New.is_terminal());
         assert!(!TransactionState::Pending.is_terminal());
         assert!(!TransactionState::Submitted.is_terminal());
+        assert!(!TransactionState::Executed.is_terminal());
+        assert!(!TransactionState::Mined.is_terminal());
         assert!(TransactionState::Success.is_terminal());
+        assert!(TransactionState::Confirmed.is_terminal());
         assert!(TransactionState::Failed.is_terminal());
+        assert!(TransactionState::Invalid.is_terminal());
     }
 
     #[test]

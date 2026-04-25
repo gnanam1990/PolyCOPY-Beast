@@ -147,7 +147,9 @@ pub fn normalize_data_api_trade(json: &str, source: SignalSource) -> Result<Sign
         direction: parse_trade_direction(
             raw.get("side")
                 .and_then(|value| value.as_str())
-                .ok_or_else(|| PolybotError::Scanner("Missing or invalid side field".to_string()))?,
+                .ok_or_else(|| {
+                    PolybotError::Scanner("Missing or invalid side field".to_string())
+                })?,
         )?,
         confidence: 8,
         secret_level: 8,

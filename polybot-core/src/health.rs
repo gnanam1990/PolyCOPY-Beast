@@ -1,22 +1,29 @@
 use axum::{
-    extract::{Query, State, WebSocketUpgrade},
     extract::ws::Message as WsMessage,
-    http::StatusCode,
+    extract::{Query, State, WebSocketUpgrade},
+    http::{HeaderMap, StatusCode},
     response::{Html, Json},
     routing::{get, post},
     Router,
 };
+use polybot_common::types::TransactionRecord;
 use serde::Serialize;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use crate::risk::RiskEngine;
 use crate::metrics::Metrics;
-use crate::state::{self, positions::PositionManager, sqlite::{RecentTradeRow, SignalLogEntry, SqliteStore}};
+use crate::risk::RiskEngine;
+use crate::state::{
+    self,
+    positions::PositionManager,
+    sqlite::{RecentTradeRow, SignalLogEntry, SqliteStore},
+};
 use rust_decimal::Decimal;
 use tokio::sync::{broadcast, Mutex};
 
 const DASHBOARD_HTML: &str = include_str!("dashboard_page.html");
+const MAX_TRANSACTIONS_LIMIT: usize = 100;
+const CONTROL_KEY_HEADER: &str = "x-polybot-control-key";
 
 #[derive(Clone)]
 pub struct HealthState {
@@ -26,6 +33,7 @@ pub struct HealthState {
     pub metrics: Arc<Metrics>,
     pub sqlite_path: String,
     pub starting_balance: Decimal,
+    pub fixed_entry_price: Decimal,
     pub risk_engine: Arc<RiskEngine>,
     pub position_manager: Arc<Mutex<PositionManager>>,
     pub event_tx: broadcast::Sender<String>,
@@ -38,6 +46,11 @@ pub struct SignalsQuery {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct TradesQuery {
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct TransactionsQuery {
     pub limit: Option<usize>,
 }
 
@@ -79,6 +92,13 @@ pub struct HealthResponse {
     pub last_signal_at: Option<String>,
     pub daily_pnl: String,
     pub balance_usd: String,
+    pub virtual_pusd: String,
+    pub reserved_pusd: String,
+    pub paper_starting_balance: String,
+    pub paper_fixed_entry_price: String,
+    pub fees_paid: String,
+    pub rebates_earned: String,
+    pub live_disabled_reason: Option<String>,
     pub drawdown_pct: String,
     pub paused: bool,
     pub open_positions: u64,
@@ -87,10 +107,52 @@ pub struct HealthResponse {
     pub emergency_stops: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct ControlResponse {
     pub ok: bool,
     pub message: String,
+}
+
+fn dashboard_control_key() -> Option<String> {
+    std::env::var("POLYBOT_DASHBOARD_CONTROL_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn control_error(
+    status: StatusCode,
+    message: impl Into<String>,
+) -> (StatusCode, Json<ControlResponse>) {
+    (
+        status,
+        Json(ControlResponse {
+            ok: false,
+            message: message.into(),
+        }),
+    )
+}
+
+fn authorize_control(headers: &HeaderMap) -> Result<(), (StatusCode, Json<ControlResponse>)> {
+    let Some(expected) = dashboard_control_key() else {
+        return Err(control_error(
+            StatusCode::FORBIDDEN,
+            "Dashboard controls are disabled until POLYBOT_DASHBOARD_CONTROL_KEY is configured.",
+        ));
+    };
+
+    let provided = headers
+        .get(CONTROL_KEY_HEADER)
+        .and_then(|value| value.to_str().ok());
+
+    if provided == Some(expected.as_str()) {
+        Ok(())
+    } else {
+        Err(control_error(
+            StatusCode::UNAUTHORIZED,
+            "Missing or invalid dashboard control key.",
+        ))
+    }
 }
 
 pub async fn health_check(State(state): State<Arc<HealthState>>) -> Json<HealthResponse> {
@@ -117,19 +179,21 @@ pub async fn health_check(State(state): State<Arc<HealthState>>) -> Json<HealthR
         == 1;
     let rpc_status = if rpc_healthy { "healthy" } else { "unhealthy" }.to_string();
     let paused = metrics.is_paused() || state.paused;
-    let (balance_usd, drawdown_pct) = match SqliteStore::open(std::path::Path::new(&state.sqlite_path)) {
-        Ok(store) => {
-            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-            match store.get_daily_stats(&today).ok().flatten() {
-                Some(stats) => {
-                    let balance = stats.starting_balance + stats.realized_pnl + stats.unrealized_pnl;
-                    (balance, stats.drawdown_pct * Decimal::new(100, 0))
+    let (balance_usd, drawdown_pct) =
+        match SqliteStore::open(std::path::Path::new(&state.sqlite_path)) {
+            Ok(store) => {
+                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                match store.get_daily_stats(&today).ok().flatten() {
+                    Some(stats) => {
+                        let balance =
+                            state.starting_balance + stats.realized_pnl + stats.unrealized_pnl;
+                        (balance, stats.drawdown_pct * Decimal::new(100, 0))
+                    }
+                    None => (state.starting_balance, Decimal::ZERO),
                 }
-                None => (state.starting_balance, Decimal::ZERO),
             }
-        }
-        Err(_) => (state.starting_balance, Decimal::ZERO),
-    };
+            Err(_) => (state.starting_balance, Decimal::ZERO),
+        };
 
     Json(HealthResponse {
         status: if paused {
@@ -147,6 +211,15 @@ pub async fn health_check(State(state): State<Arc<HealthState>>) -> Json<HealthR
         last_signal_at: last_signal,
         daily_pnl: format!("{:.2}", metrics.daily_pnl_usd()),
         balance_usd: format!("{:.2}", balance_usd),
+        virtual_pusd: format!("{:.2}", metrics.virtual_pusd()),
+        reserved_pusd: format!("{:.2}", metrics.reserved_pusd()),
+        paper_starting_balance: format!("{:.2}", state.starting_balance),
+        paper_fixed_entry_price: format!("{:.2}", state.fixed_entry_price),
+        fees_paid: format!("{:.2}", metrics.fees_paid()),
+        rebates_earned: format!("{:.2}", metrics.rebates_earned()),
+        live_disabled_reason: state
+            .simulation_mode
+            .then(|| "simulation-complete milestone keeps live submission disabled".to_string()),
         drawdown_pct: format!("{:.2}", drawdown_pct),
         paused,
         open_positions: metrics
@@ -254,7 +327,8 @@ async fn resolve_market_name(sqlite_path: &str, condition_id: &str) -> Option<St
                 if let Some(markets) = json.as_array() {
                     if let Some(market) = markets.first() {
                         // Validate API returned the CORRECT condition_id, not a fallback
-                        let returned_condition_id = market.get("conditionId").and_then(|q| q.as_str());
+                        let returned_condition_id =
+                            market.get("conditionId").and_then(|q| q.as_str());
                         if returned_condition_id != Some(condition_id) {
                             tracing::debug!(
                                 requested = %condition_id,
@@ -264,21 +338,36 @@ async fn resolve_market_name(sqlite_path: &str, condition_id: &str) -> Option<St
                             return None;
                         }
 
-                        let question = market.get("question").and_then(|q| q.as_str()).map(|s| s.to_string());
-                        let slug = market.get("slug").and_then(|q| q.as_str()).map(|s| s.to_string());
-                        let icon = market.get("icon").and_then(|q| q.as_str()).map(|s| s.to_string());
-                        let resolved = market.get("resolved").and_then(|q| q.as_bool()).unwrap_or(false);
+                        let question = market
+                            .get("question")
+                            .and_then(|q| q.as_str())
+                            .map(|s| s.to_string());
+                        let slug = market
+                            .get("slug")
+                            .and_then(|q| q.as_str())
+                            .map(|s| s.to_string());
+                        let icon = market
+                            .get("icon")
+                            .and_then(|q| q.as_str())
+                            .map(|s| s.to_string());
+                        let resolved = market
+                            .get("resolved")
+                            .and_then(|q| q.as_bool())
+                            .unwrap_or(false);
 
                         if let Some(ref q) = question {
-                            if let Ok(store) = SqliteStore::open(std::path::Path::new(sqlite_path)) {
-                                let _ = store.upsert_market_metadata(&crate::state::sqlite::MarketMetadataRow {
-                                    condition_id: condition_id.to_string(),
-                                    question: Some(q.clone()),
-                                    slug,
-                                    icon,
-                                    resolved,
-                                    fetched_at: chrono::Utc::now().to_rfc3339(),
-                                });
+                            if let Ok(store) = SqliteStore::open(std::path::Path::new(sqlite_path))
+                            {
+                                let _ = store.upsert_market_metadata(
+                                    &crate::state::sqlite::MarketMetadataRow {
+                                        condition_id: condition_id.to_string(),
+                                        question: Some(q.clone()),
+                                        slug,
+                                        icon,
+                                        resolved,
+                                        fetched_at: chrono::Utc::now().to_rfc3339(),
+                                    },
+                                );
                             }
                         }
                         return question;
@@ -305,7 +394,10 @@ pub async fn positions_handler(
                     let market_name = resolve_market_name(&path, &row.position.market_id).await;
                     let has_live_price = row.current_price.is_some()
                         && !state.simulation_mode
-                        && row.current_price.map(|p| p != Decimal::new(50, 2)).unwrap_or(false);
+                        && row
+                            .current_price
+                            .map(|p| p != Decimal::new(50, 2))
+                            .unwrap_or(false);
                     out.push(PositionResponse {
                         id: row.position.id,
                         market_id: row.position.market_id,
@@ -351,43 +443,68 @@ pub async fn executions_handler(
     }
 }
 
+pub async fn transactions_handler(
+    State(state): State<Arc<HealthState>>,
+    Query(query): Query<TransactionsQuery>,
+) -> Json<Vec<TransactionRecord>> {
+    let limit = query.limit.unwrap_or(20).min(MAX_TRANSACTIONS_LIMIT);
+    match SqliteStore::open(std::path::Path::new(&state.sqlite_path)) {
+        Ok(store) => Json(store.latest_transactions(limit).unwrap_or_default()),
+        Err(_) => Json(Vec::new()),
+    }
+}
+
 pub async fn daily_stats_handler(
     State(state): State<Arc<HealthState>>,
     Query(query): Query<DailyStatsQuery>,
 ) -> Json<DailyStatsResponse> {
     let days = query.days.unwrap_or(7);
-    Json(match SqliteStore::open(std::path::Path::new(&state.sqlite_path)) {
-        Ok(store) => {
-            let rows = store.get_recent_daily_stats(days).unwrap_or_default();
-            DailyStatsResponse {
-                entries: rows.into_iter().map(|r| DailyStatsEntry {
-                    date: r.date,
-                    realized_pnl: r.realized_pnl.to_string(),
-                    unrealized_pnl: r.unrealized_pnl.to_string(),
-                    volume_traded: r.volume_traded.to_string(),
-                    trades_placed: r.trades_placed,
-                    trades_filled: r.trades_filled,
-                    trades_rejected: r.trades_rejected,
-                    drawdown_pct: r.drawdown_pct.to_string(),
-                }).collect(),
+    Json(
+        match SqliteStore::open(std::path::Path::new(&state.sqlite_path)) {
+            Ok(store) => {
+                let rows = store.get_recent_daily_stats(days).unwrap_or_default();
+                DailyStatsResponse {
+                    entries: rows
+                        .into_iter()
+                        .map(|r| DailyStatsEntry {
+                            date: r.date,
+                            realized_pnl: r.realized_pnl.to_string(),
+                            unrealized_pnl: r.unrealized_pnl.to_string(),
+                            volume_traded: r.volume_traded.to_string(),
+                            trades_placed: r.trades_placed,
+                            trades_filled: r.trades_filled,
+                            trades_rejected: r.trades_rejected,
+                            drawdown_pct: r.drawdown_pct.to_string(),
+                        })
+                        .collect(),
+                }
             }
-        }
-        Err(_) => DailyStatsResponse { entries: Vec::new() },
-    })
+            Err(_) => DailyStatsResponse {
+                entries: Vec::new(),
+            },
+        },
+    )
 }
 
 pub async fn pause_handler(
+    headers: HeaderMap,
     State(state): State<Arc<HealthState>>,
 ) -> Result<Json<ControlResponse>, (StatusCode, Json<ControlResponse>)> {
+    authorize_control(&headers)?;
     state.risk_engine.set_emergency_stop(true).await;
     state.metrics.set_paused(true);
-    Ok(Json(ControlResponse { ok: true, message: "Trading paused.".to_string() }))
+    Ok(Json(ControlResponse {
+        ok: true,
+        message: "Trading paused.".to_string(),
+    }))
 }
 
 pub async fn resume_handler(
+    headers: HeaderMap,
     State(state): State<Arc<HealthState>>,
     Query(query): Query<ResumeQuery>,
 ) -> Result<Json<ControlResponse>, (StatusCode, Json<ControlResponse>)> {
+    authorize_control(&headers)?;
     if state.risk_engine.is_loss_cooldown_active().await && query.confirm != Some(true) {
         return Err((
             StatusCode::CONFLICT,
@@ -411,30 +528,39 @@ pub async fn resume_handler(
     state.risk_engine.set_emergency_stop(false).await;
     state.risk_engine.clear_resume_confirmation().await;
     state.metrics.set_paused(false);
-    Ok(Json(ControlResponse { ok: true, message: "Trading resumed.".to_string() }))
+    Ok(Json(ControlResponse {
+        ok: true,
+        message: "Trading resumed.".to_string(),
+    }))
 }
 
 pub async fn emergency_stop_handler(
+    headers: HeaderMap,
     State(state): State<Arc<HealthState>>,
 ) -> Result<Json<ControlResponse>, (StatusCode, Json<ControlResponse>)> {
+    authorize_control(&headers)?;
     state.risk_engine.set_emergency_stop(true).await;
     state.metrics.record_emergency_stop();
     state.metrics.set_paused(true);
-    let closed_positions = state::force_flatten_positions(
-        state.metrics.clone(),
-        state.position_manager.clone(),
-    )
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ControlResponse { ok: false, message: format!("Emergency stop failed: {}", e) }),
-        )
-    })?;
+    let closed_positions =
+        state::force_flatten_positions(state.metrics.clone(), state.position_manager.clone())
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ControlResponse {
+                        ok: false,
+                        message: format!("Emergency stop failed: {}", e),
+                    }),
+                )
+            })?;
 
     Ok(Json(ControlResponse {
         ok: true,
-        message: format!("Emergency stop applied. Closed {} positions.", closed_positions),
+        message: format!(
+            "Emergency stop applied. Closed {} positions.",
+            closed_positions
+        ),
     }))
 }
 
@@ -465,6 +591,7 @@ pub fn create_health_router(state: Arc<HealthState>) -> Router {
         .route("/positions", get(positions_handler))
         .route("/signals", get(signals_handler))
         .route("/executions", get(executions_handler))
+        .route("/transactions", get(transactions_handler))
         .route("/daily", get(daily_stats_handler))
         .route("/ws", get(ws_handler))
         .route("/control/pause", post(pause_handler))
@@ -472,7 +599,10 @@ pub fn create_health_router(state: Arc<HealthState>) -> Router {
         .route("/control/resume", post(resume_handler))
         .route("/health/control/resume", post(resume_handler))
         .route("/control/emergency-stop", post(emergency_stop_handler))
-        .route("/health/control/emergency-stop", post(emergency_stop_handler))
+        .route(
+            "/health/control/emergency-stop",
+            post(emergency_stop_handler),
+        )
         .with_state(state)
 }
 
@@ -502,11 +632,43 @@ mod tests {
     use crate::config::AppConfig;
     use crate::risk::RiskEngine;
     use crate::state::positions::PositionManager;
+    use axum::http::HeaderValue;
     use rust_decimal_macros::dec;
+    use serial_test::serial;
     use tokio::sync::Mutex;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn new(key: &'static str) -> Self {
+            Self {
+                key,
+                original: std::env::var(key).ok(),
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.original.as_ref() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    fn control_headers(key: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTROL_KEY_HEADER, HeaderValue::from_str(key).unwrap());
+        headers
+    }
 
     fn test_health_state(sqlite_path: String) -> Arc<HealthState> {
         let metrics = Arc::new(Metrics::new());
+        metrics.update_v2_accounting(dec!(1000), Decimal::ZERO, Decimal::ZERO, Decimal::ZERO);
         let position_manager = Arc::new(Mutex::new(PositionManager::new()));
         let risk_engine = Arc::new(RiskEngine::new(
             Arc::new(AppConfig::default()),
@@ -522,6 +684,7 @@ mod tests {
             metrics,
             sqlite_path,
             starting_balance: dec!(1000),
+            fixed_entry_price: dec!(0.50),
             risk_engine,
             position_manager,
             event_tx: tokio::sync::broadcast::channel(2).0,
@@ -530,24 +693,63 @@ mod tests {
 
     #[tokio::test]
     async fn health_check_includes_balance_and_drawdown_fields() {
-        let sqlite_path = std::env::temp_dir().join(format!("polybot-health-{}.db", uuid::Uuid::new_v4()));
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-health-{}.db", uuid::Uuid::new_v4()));
         let state = test_health_state(sqlite_path.to_string_lossy().to_string());
 
         let response = health_check(State(state)).await.0;
         assert_eq!(response.balance_usd, "1000.00");
+        assert_eq!(response.virtual_pusd, "1000.00");
+        assert_eq!(response.reserved_pusd, "0.00");
+        assert_eq!(response.paper_starting_balance, "1000.00");
+        assert_eq!(response.paper_fixed_entry_price, "0.50");
+        assert_eq!(response.fees_paid, "0.00");
+        assert_eq!(response.rebates_earned, "0.00");
+        assert!(response.live_disabled_reason.is_some());
         assert_eq!(response.drawdown_pct, "0.00");
+
+        let _ = std::fs::remove_file(sqlite_path);
+    }
+
+    #[tokio::test]
+    async fn health_check_uses_configured_starting_balance_over_stale_sqlite() {
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-health-stale-{}.db", uuid::Uuid::new_v4()));
+        let state = test_health_state(sqlite_path.to_string_lossy().to_string());
+        let store = SqliteStore::open(&sqlite_path).unwrap();
+        store
+            .upsert_daily_stats(&crate::state::sqlite::DailyStatsRow {
+                date: chrono::Utc::now().format("%Y-%m-%d").to_string(),
+                starting_balance: dec!(333.33),
+                realized_pnl: dec!(0),
+                unrealized_pnl: dec!(0),
+                volume_traded: dec!(0),
+                trades_placed: 0,
+                trades_filled: 0,
+                trades_rejected: 0,
+                drawdown_pct: dec!(0),
+                paused_at: None,
+                notes: None,
+            })
+            .unwrap();
+
+        let response = health_check(State(state)).await.0;
+
+        assert_eq!(response.balance_usd, "1000.00");
 
         let _ = std::fs::remove_file(sqlite_path);
     }
 
     #[test]
     fn health_router_exposes_executions_and_control_routes() {
-        let sqlite_path = std::env::temp_dir().join(format!("polybot-health-routes-{}.db", uuid::Uuid::new_v4()));
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-health-routes-{}.db", uuid::Uuid::new_v4()));
         let state = test_health_state(sqlite_path.to_string_lossy().to_string());
         let router = create_health_router(state);
 
         let dbg = format!("{:?}", router);
         assert!(dbg.contains("/executions"));
+        assert!(dbg.contains("/transactions"));
         assert!(dbg.contains("/control/pause"));
         assert!(dbg.contains("/control/resume"));
         assert!(dbg.contains("/control/emergency-stop"));
@@ -559,8 +761,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transactions_handler_returns_empty_vec_on_store_error() {
+        let state = test_health_state(std::env::temp_dir().to_string_lossy().to_string());
+
+        let response =
+            transactions_handler(State(state), Query(TransactionsQuery { limit: Some(5) }))
+                .await
+                .0;
+
+        assert!(response.is_empty());
+    }
+
+    #[tokio::test]
+    async fn transactions_handler_clamps_requested_limit() {
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-health-txns-{}.db", uuid::Uuid::new_v4()));
+        let state = test_health_state(sqlite_path.to_string_lossy().to_string());
+        let store = SqliteStore::open(&sqlite_path).unwrap();
+
+        for idx in 0..(MAX_TRANSACTIONS_LIMIT + 1) {
+            let submitted_at = chrono::Utc::now() + chrono::Duration::seconds(idx as i64);
+            let record = TransactionRecord {
+                transaction_id: format!("txn-{idx}"),
+                trade_id: None,
+                kind: polybot_common::types::TransactionKind::Order,
+                state: polybot_common::types::TransactionState::Success,
+                submitted_at,
+                confirmed_at: Some(submitted_at),
+                transaction_hash: Some(format!("0x{idx:x}")),
+                error_msg: None,
+            };
+            store.insert_transaction(&record).unwrap();
+        }
+
+        let response = transactions_handler(
+            State(state),
+            Query(TransactionsQuery {
+                limit: Some(usize::MAX),
+            }),
+        )
+        .await
+        .0;
+
+        assert_eq!(response.len(), MAX_TRANSACTIONS_LIMIT);
+
+        let _ = std::fs::remove_file(sqlite_path);
+    }
+
+    #[tokio::test]
     async fn positions_handler_prefers_sqlite_positions_when_available() {
-        let sqlite_path = std::env::temp_dir().join(format!("polybot-health-pos-{}.db", uuid::Uuid::new_v4()));
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-health-pos-{}.db", uuid::Uuid::new_v4()));
         let state = test_health_state(sqlite_path.to_string_lossy().to_string());
         let store = SqliteStore::open(&sqlite_path).unwrap();
         let position = polybot_common::types::Position {
@@ -574,7 +825,9 @@ mod tests {
             status: polybot_common::types::PositionStatus::Open,
             category: polybot_common::types::Category::Politics,
         };
-        store.upsert_position(&position, Some(dec!(0.60)), Some(dec!(0.5)), Some("0xabc")).unwrap();
+        store
+            .upsert_position(&position, Some(dec!(0.60)), Some(dec!(0.5)), Some("0xabc"))
+            .unwrap();
 
         let positions = positions_handler(State(state)).await.0;
         assert_eq!(positions.len(), 1);
@@ -584,8 +837,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn resume_handler_requires_explicit_confirmation_after_loss_breach() {
-        let sqlite_path = std::env::temp_dir().join(format!("polybot-health-resume-{}.db", uuid::Uuid::new_v4()));
+        let _guard = EnvVarGuard::new("POLYBOT_DASHBOARD_CONTROL_KEY");
+        std::env::set_var("POLYBOT_DASHBOARD_CONTROL_KEY", "test-control-key");
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-health-resume-{}.db", uuid::Uuid::new_v4()));
         let metrics = Arc::new(Metrics::new());
         let position_manager = Arc::new(Mutex::new(PositionManager::new()));
         let mut config = AppConfig::default();
@@ -604,13 +861,67 @@ mod tests {
             metrics,
             sqlite_path: sqlite_path.to_string_lossy().to_string(),
             starting_balance: dec!(1000),
+            fixed_entry_price: dec!(0.50),
             risk_engine,
             position_manager,
             event_tx: tokio::sync::broadcast::channel(2).0,
         });
 
-        let result = resume_handler(State(state), Query(ResumeQuery { confirm: None })).await;
+        let result = resume_handler(
+            control_headers("test-control-key"),
+            State(state),
+            Query(ResumeQuery { confirm: None }),
+        )
+        .await;
         assert!(result.is_err());
+
+        let _ = std::fs::remove_file(sqlite_path);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn dashboard_control_routes_require_configured_key() {
+        let _guard = EnvVarGuard::new("POLYBOT_DASHBOARD_CONTROL_KEY");
+        std::env::remove_var("POLYBOT_DASHBOARD_CONTROL_KEY");
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-health-auth-{}.db", uuid::Uuid::new_v4()));
+        let state = test_health_state(sqlite_path.to_string_lossy().to_string());
+
+        let result = pause_handler(HeaderMap::new(), State(state)).await;
+
+        assert!(matches!(result, Err((StatusCode::FORBIDDEN, _))));
+
+        let _ = std::fs::remove_file(sqlite_path);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn dashboard_control_routes_reject_wrong_key() {
+        let _guard = EnvVarGuard::new("POLYBOT_DASHBOARD_CONTROL_KEY");
+        std::env::set_var("POLYBOT_DASHBOARD_CONTROL_KEY", "test-control-key");
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-health-auth-{}.db", uuid::Uuid::new_v4()));
+        let state = test_health_state(sqlite_path.to_string_lossy().to_string());
+
+        let result = pause_handler(control_headers("wrong-key"), State(state)).await;
+
+        assert!(matches!(result, Err((StatusCode::UNAUTHORIZED, _))));
+
+        let _ = std::fs::remove_file(sqlite_path);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn dashboard_control_routes_accept_matching_key() {
+        let _guard = EnvVarGuard::new("POLYBOT_DASHBOARD_CONTROL_KEY");
+        std::env::set_var("POLYBOT_DASHBOARD_CONTROL_KEY", "test-control-key");
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-health-auth-{}.db", uuid::Uuid::new_v4()));
+        let state = test_health_state(sqlite_path.to_string_lossy().to_string());
+
+        let result = pause_handler(control_headers("test-control-key"), State(state)).await;
+
+        assert!(result.unwrap().0.ok);
 
         let _ = std::fs::remove_file(sqlite_path);
     }

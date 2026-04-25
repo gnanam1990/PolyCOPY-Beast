@@ -296,7 +296,9 @@ impl SqliteStore {
         let mut stmt = self
             .conn
             .prepare(&format!("PRAGMA table_info({})", table))
-            .map_err(|e| PolybotError::State(format!("Failed to inspect {} columns: {}", table, e)))?;
+            .map_err(|e| {
+                PolybotError::State(format!("Failed to inspect {} columns: {}", table, e))
+            })?;
         let exists = stmt
             .query_map([], |row| row.get::<_, String>(1))
             .map_err(|e| PolybotError::State(format!("Failed to query {} columns: {}", table, e)))?
@@ -310,10 +312,7 @@ impl SqliteStore {
                     [],
                 )
                 .map_err(|e| {
-                    PolybotError::State(format!(
-                        "Failed to add {}.{} column: {}",
-                        table, column, e
-                    ))
+                    PolybotError::State(format!("Failed to add {}.{} column: {}", table, column, e))
                 })?;
         }
 
@@ -376,8 +375,9 @@ impl SqliteStore {
     }
 
     pub fn insert_trade(&self, trade: &Trade) -> Result<(), PolybotError> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO trades (
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO trades (
                 id, signal_id, source_wallet, market_id, category, side, direction, price, size,
                 size_usd, filled_size, order_type, status, placed_at, filled_at, simulated,
                 transaction_id, transaction_hash, relayer_state,
@@ -388,40 +388,38 @@ impl SqliteStore {
                 ?17, ?18, ?19,
                 ?20, ?21, ?22, ?23, ?24
             )",
-            rusqlite::params![
-                trade.id,
-                trade.signal_id,
-                trade.source_wallet,
-                trade.market_id,
-                trade.category.to_string(),
-                format!("{:?}", trade.side),
-                format!("{:?}", trade.direction),
-                trade.price.to_string(),
-                trade.size.to_string(),
-                trade.size_usd.to_string(),
-                trade.filled_size.to_string(),
-                format!("{:?}", trade.order_type),
-                format!("{:?}", trade.status),
-                trade.placed_at.to_rfc3339(),
-                trade.filled_at.map(|t| t.to_rfc3339()),
-                trade.simulated as i32,
-                trade.transaction_id,
-                trade.transaction_hash,
-                trade.relayer_state.map(|s| s.as_sqlite_str().to_string()),
-                trade.taker_fee_bps as i64,
-                trade.fee_paid_usdc.to_string(),
-                trade.rebate_usdc.to_string(),
-                trade.retry_count as i64,
-                trade.error_msg,
-            ],
-        ).map_err(|e| PolybotError::State(format!("Failed to insert trade: {}", e)))?;
+                rusqlite::params![
+                    trade.id,
+                    trade.signal_id,
+                    trade.source_wallet,
+                    trade.market_id,
+                    trade.category.to_string(),
+                    format!("{:?}", trade.side),
+                    format!("{:?}", trade.direction),
+                    trade.price.to_string(),
+                    trade.size.to_string(),
+                    trade.size_usd.to_string(),
+                    trade.filled_size.to_string(),
+                    format!("{:?}", trade.order_type),
+                    format!("{:?}", trade.status),
+                    trade.placed_at.to_rfc3339(),
+                    trade.filled_at.map(|t| t.to_rfc3339()),
+                    trade.simulated as i32,
+                    trade.transaction_id,
+                    trade.transaction_hash,
+                    trade.relayer_state.map(|s| s.as_sqlite_str().to_string()),
+                    trade.taker_fee_bps as i64,
+                    trade.fee_paid_usdc.to_string(),
+                    trade.rebate_usdc.to_string(),
+                    trade.retry_count as i64,
+                    trade.error_msg,
+                ],
+            )
+            .map_err(|e| PolybotError::State(format!("Failed to insert trade: {}", e)))?;
         Ok(())
     }
 
-    pub fn insert_signal_log(
-        &self,
-        entry: &SignalLogInsert<'_>,
-    ) -> Result<(), PolybotError> {
+    pub fn insert_signal_log(&self, entry: &SignalLogInsert<'_>) -> Result<(), PolybotError> {
         self.conn.execute(
             "INSERT OR IGNORE INTO signal_log (signal_id, timestamp, wallet_address, market_id, confidence, secret_level, category, side, disposition, received_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))",
@@ -473,7 +471,10 @@ impl SqliteStore {
     }
 
     /// Anti-duplication rule: find which wallet owns an open position for a given token_id.
-    pub fn get_open_position_owner_by_token(&self, token_id: &str) -> Result<Option<String>, PolybotError> {
+    pub fn get_open_position_owner_by_token(
+        &self,
+        token_id: &str,
+    ) -> Result<Option<String>, PolybotError> {
         use rusqlite::OptionalExtension as _;
         self.conn
             .query_row(
@@ -491,14 +492,18 @@ impl SqliteStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| PolybotError::State(format!("Failed to query position owner by token: {}", e)))
+            .map_err(|e| {
+                PolybotError::State(format!("Failed to query position owner by token: {}", e))
+            })
     }
 
     pub fn update_signal_status(&self, signal_id: &str, status: &str) -> Result<(), PolybotError> {
-        self.conn.execute(
-            "UPDATE signals SET status = ?2 WHERE id = ?1",
-            [signal_id, status],
-        ).map_err(|e| PolybotError::State(format!("Failed to update signal status: {}", e)))?;
+        self.conn
+            .execute(
+                "UPDATE signals SET status = ?2 WHERE id = ?1",
+                [signal_id, status],
+            )
+            .map_err(|e| PolybotError::State(format!("Failed to update signal status: {}", e)))?;
         Ok(())
     }
 
@@ -731,7 +736,8 @@ impl SqliteStore {
             .map_err(|e| PolybotError::State(format!("Failed to read open positions: {}", e)))
     }
 
-    pub fn get_market_metadata(&self,
+    pub fn get_market_metadata(
+        &self,
         condition_id: &str,
     ) -> Result<Option<MarketMetadataRow>, PolybotError> {
         use rusqlite::OptionalExtension as _;
@@ -754,10 +760,7 @@ impl SqliteStore {
             .map_err(|e| PolybotError::State(format!("Failed to get market metadata: {}", e)))
     }
 
-    pub fn upsert_market_metadata(
-        &self,
-        row: &MarketMetadataRow,
-    ) -> Result<(), PolybotError> {
+    pub fn upsert_market_metadata(&self, row: &MarketMetadataRow) -> Result<(), PolybotError> {
         self.conn.execute(
             "INSERT INTO market_metadata (condition_id, question, slug, icon, resolved, fetched_at)
              VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)
@@ -871,21 +874,28 @@ impl SqliteStore {
         let mut stmt = self.conn.prepare(
             "SELECT date, starting_balance, realized_pnl, unrealized_pnl, volume_traded, trades_placed, trades_filled, trades_rejected, drawdown_pct, paused_at, notes FROM daily_stats ORDER BY date DESC LIMIT ?1"
         ).map_err(|e| PolybotError::State(format!("Failed to prepare recent stats: {}", e)))?;
-        let rows = stmt.query_map([limit], |row| {
-            Ok(DailyStatsRow {
-                date: row.get(0)?,
-                starting_balance: Decimal::from_str(&row.get::<_, String>(1)?).unwrap_or(Decimal::ZERO),
-                realized_pnl: Decimal::from_str(&row.get::<_, String>(2)?).unwrap_or(Decimal::ZERO),
-                unrealized_pnl: Decimal::from_str(&row.get::<_, String>(3)?).unwrap_or(Decimal::ZERO),
-                volume_traded: Decimal::from_str(&row.get::<_, String>(4)?).unwrap_or(Decimal::ZERO),
-                trades_placed: row.get(5)?,
-                trades_filled: row.get(6)?,
-                trades_rejected: row.get(7)?,
-                drawdown_pct: Decimal::from_str(&row.get::<_, String>(8)?).unwrap_or(Decimal::ZERO),
-                paused_at: row.get(9)?,
-                notes: row.get(10)?,
+        let rows = stmt
+            .query_map([limit], |row| {
+                Ok(DailyStatsRow {
+                    date: row.get(0)?,
+                    starting_balance: Decimal::from_str(&row.get::<_, String>(1)?)
+                        .unwrap_or(Decimal::ZERO),
+                    realized_pnl: Decimal::from_str(&row.get::<_, String>(2)?)
+                        .unwrap_or(Decimal::ZERO),
+                    unrealized_pnl: Decimal::from_str(&row.get::<_, String>(3)?)
+                        .unwrap_or(Decimal::ZERO),
+                    volume_traded: Decimal::from_str(&row.get::<_, String>(4)?)
+                        .unwrap_or(Decimal::ZERO),
+                    trades_placed: row.get(5)?,
+                    trades_filled: row.get(6)?,
+                    trades_rejected: row.get(7)?,
+                    drawdown_pct: Decimal::from_str(&row.get::<_, String>(8)?)
+                        .unwrap_or(Decimal::ZERO),
+                    paused_at: row.get(9)?,
+                    notes: row.get(10)?,
+                })
             })
-        }).map_err(|e| PolybotError::State(format!("Failed to query recent stats: {}", e)))?;
+            .map_err(|e| PolybotError::State(format!("Failed to query recent stats: {}", e)))?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r.map_err(|e| PolybotError::State(format!("Row error: {}", e)))?);
@@ -1060,22 +1070,25 @@ impl SqliteStore {
         } else {
             None
         };
-        self.conn.execute(
-            "UPDATE transactions
+        self.conn
+            .execute(
+                "UPDATE transactions
              SET state = ?2,
                  confirmed_at = COALESCE(?3, confirmed_at),
                  transaction_hash = COALESCE(?4, transaction_hash),
                  error_msg = COALESCE(?5, error_msg)
              WHERE transaction_id = ?1",
-            rusqlite::params![
-                transaction_id,
-                state.as_sqlite_str(),
-                confirmed_at,
-                transaction_hash,
-                error_msg,
-            ],
-        )
-        .map_err(|e| PolybotError::State(format!("Failed to update transaction state: {}", e)))?;
+                rusqlite::params![
+                    transaction_id,
+                    state.as_sqlite_str(),
+                    confirmed_at,
+                    transaction_hash,
+                    error_msg,
+                ],
+            )
+            .map_err(|e| {
+                PolybotError::State(format!("Failed to update transaction state: {}", e))
+            })?;
         Ok(())
     }
 
@@ -1114,6 +1127,31 @@ impl SqliteStore {
             .map_err(|e| PolybotError::State(format!("Failed to collect tx rows: {}", e)))
     }
 
+    pub fn latest_transactions(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<polybot_common::types::TransactionRecord>, PolybotError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT transaction_id, trade_id, type, state, submitted_at, confirmed_at, transaction_hash, error_msg
+                 FROM transactions
+                 ORDER BY submitted_at DESC
+                 LIMIT ?1",
+            )
+            .map_err(|e| {
+                PolybotError::State(format!("Failed to prepare latest transactions: {}", e))
+            })?;
+        let rows = stmt
+            .query_map([limit as i64], Self::row_to_transaction_record)
+            .map_err(|e| {
+                PolybotError::State(format!("Failed to query latest transactions: {}", e))
+            })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| {
+            PolybotError::State(format!("Failed to collect latest transactions: {}", e))
+        })
+    }
+
     fn row_to_transaction_record(
         row: &rusqlite::Row<'_>,
     ) -> rusqlite::Result<polybot_common::types::TransactionRecord> {
@@ -1124,6 +1162,7 @@ impl SqliteStore {
             "order" => TransactionKind::Order,
             "cancel" => TransactionKind::Cancel,
             "wrap" => TransactionKind::Wrap,
+            "unwrap" => TransactionKind::Unwrap,
             "approve" => TransactionKind::Approve,
             "redeem" => TransactionKind::Redeem,
             "deploy" => TransactionKind::Deploy,
@@ -1139,8 +1178,12 @@ impl SqliteStore {
             "STATE_NEW" => TransactionState::New,
             "STATE_PENDING" => TransactionState::Pending,
             "STATE_SUBMITTED" => TransactionState::Submitted,
+            "STATE_EXECUTED" => TransactionState::Executed,
+            "STATE_MINED" => TransactionState::Mined,
             "STATE_SUCCESS" => TransactionState::Success,
+            "STATE_CONFIRMED" => TransactionState::Confirmed,
             "STATE_FAILED" => TransactionState::Failed,
+            "STATE_INVALID" => TransactionState::Invalid,
             other => {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     3,
@@ -1151,24 +1194,27 @@ impl SqliteStore {
         };
         let submitted_at_str: String = row.get(4)?;
         let submitted_at = chrono::DateTime::parse_from_rfc3339(&submitted_at_str)
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-                4,
-                rusqlite::types::Type::Text,
-                Box::new(e),
-            ))?
+            .map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    4,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?
             .with_timezone(&chrono::Utc);
         let confirmed_at_str: Option<String> = row.get(5)?;
         let confirmed_at = confirmed_at_str
             .map(|s| {
-                chrono::DateTime::parse_from_rfc3339(&s)
-                    .map(|d| d.with_timezone(&chrono::Utc))
+                chrono::DateTime::parse_from_rfc3339(&s).map(|d| d.with_timezone(&chrono::Utc))
             })
             .transpose()
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-                5,
-                rusqlite::types::Type::Text,
-                Box::new(e),
-            ))?;
+            .map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    5,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
         Ok(TransactionRecord {
             transaction_id: row.get(0)?,
             trade_id: row.get(1)?,
@@ -1308,7 +1354,9 @@ mod tests {
             secret_level: 6,
             category: Category::Politics,
             source: SignalSource::Polling,
-            tx_hash: Some("0x1234567890123456789012345678901234567890123456789012345678901234".to_string()),
+            tx_hash: Some(
+                "0x1234567890123456789012345678901234567890123456789012345678901234".to_string(),
+            ),
             token_id: Some("token-1".to_string()),
             target_price: Some(dec!(0.60)),
             target_size_usdc: Some(dec!(60)),
@@ -1319,7 +1367,9 @@ mod tests {
             fee_schedule: None,
             scanner_version: "1.0.0".to_string(),
         };
-        store.insert_signal(&signal, "polling", "YES", "executed").unwrap();
+        store
+            .insert_signal(&signal, "polling", "YES", "executed")
+            .unwrap();
 
         let position = Position {
             id: "pos-1".to_string(),
@@ -1332,10 +1382,15 @@ mod tests {
             status: PositionStatus::Open,
             category: Category::Politics,
         };
-        store.upsert_position(&position, Some(dec!(0.60)), Some(dec!(0)), Some("0xabc")).unwrap();
+        store
+            .upsert_position(&position, Some(dec!(0.60)), Some(dec!(0)), Some("0xabc"))
+            .unwrap();
 
         assert_eq!(
-            store.get_open_position_owner_by_token("token-1").unwrap().as_deref(),
+            store
+                .get_open_position_owner_by_token("token-1")
+                .unwrap()
+                .as_deref(),
             Some("0xabc")
         );
     }
@@ -1424,8 +1479,13 @@ mod tests {
 
         assert_eq!(loaded.side, "YES");
 
-        store.delete_copied_lot(&lot.source_wallet, &lot.market_id, "yes").unwrap();
-        assert!(store.get_copied_lot(&lot.source_wallet, &lot.market_id, "YES").unwrap().is_none());
+        store
+            .delete_copied_lot(&lot.source_wallet, &lot.market_id, "yes")
+            .unwrap();
+        assert!(store
+            .get_copied_lot(&lot.source_wallet, &lot.market_id, "YES")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -1658,10 +1718,13 @@ mod tests {
             resolved: false,
             redeemable: false,
             suggested_size_usdc: None,
+            fee_schedule: None,
             scanner_version: "1.0.0".to_string(),
         };
 
-        store.insert_signal(&signal, "polling", "YES", "executed").unwrap();
+        store
+            .insert_signal(&signal, "polling", "YES", "executed")
+            .unwrap();
         let persisted = store.get_signal("sig-1").unwrap().unwrap();
 
         assert_eq!(persisted.direction, "Sell");
@@ -1687,6 +1750,14 @@ mod tests {
             placed_at: chrono::Utc::now(),
             filled_at: Some(chrono::Utc::now()),
             simulated: true,
+            transaction_id: None,
+            transaction_hash: None,
+            relayer_state: None,
+            taker_fee_bps: 0,
+            fee_paid_usdc: Decimal::ZERO,
+            rebate_usdc: Decimal::ZERO,
+            retry_count: 0,
+            error_msg: None,
         };
 
         store.insert_trade(&trade).unwrap();
@@ -1818,7 +1889,9 @@ mod migration_runner_tests {
             .conn
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        store.run_migrations_for_test().expect("re-run should be no-op");
+        store
+            .run_migrations_for_test()
+            .expect("re-run should be no-op");
         let after: i64 = store
             .conn
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
@@ -1968,8 +2041,8 @@ mod migration_runner_tests {
 #[cfg(test)]
 mod transactions_crud_tests {
     use super::SqliteStore;
-    use polybot_common::types::{TransactionKind, TransactionRecord, TransactionState};
     use chrono::Utc;
+    use polybot_common::types::{TransactionKind, TransactionRecord, TransactionState};
 
     fn sample_record() -> TransactionRecord {
         TransactionRecord {
@@ -2011,10 +2084,7 @@ mod transactions_crud_tests {
                 None,
             )
             .unwrap();
-        let got = store
-            .get_transaction(&rec.transaction_id)
-            .unwrap()
-            .unwrap();
+        let got = store.get_transaction(&rec.transaction_id).unwrap().unwrap();
         assert_eq!(got.state, TransactionState::Success);
         assert_eq!(got.transaction_hash.as_deref(), Some("0xdeadbeef"));
         assert!(got.confirmed_at.is_some());
@@ -2033,6 +2103,28 @@ mod transactions_crud_tests {
         let pending = store.list_non_terminal_transactions().unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].transaction_id, "txn_a");
+    }
+
+    #[test]
+    fn latest_transactions_orders_by_submitted_at_desc_and_limits() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut oldest = sample_record();
+        oldest.transaction_id = "txn_oldest".into();
+        oldest.submitted_at = chrono::DateTime::parse_from_rfc3339("2026-04-24T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let mut newest = sample_record();
+        newest.transaction_id = "txn_newest".into();
+        newest.submitted_at = chrono::DateTime::parse_from_rfc3339("2026-04-25T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        store.insert_transaction(&oldest).unwrap();
+        store.insert_transaction(&newest).unwrap();
+
+        let latest = store.latest_transactions(1).unwrap();
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].transaction_id, "txn_newest");
     }
 }
 
@@ -2167,7 +2259,17 @@ mod insert_trade_v2_tests {
                         taker_fee_bps, fee_paid_usdc, rebate_usdc, retry_count
                  FROM trades WHERE id = 't-v2'",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                    ))
+                },
             )
             .unwrap();
 
