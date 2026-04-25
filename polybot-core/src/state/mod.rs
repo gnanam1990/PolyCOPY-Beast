@@ -36,11 +36,27 @@ pub async fn recover_from_sqlite(
 }
 
 fn initial_starting_balance(config: &AppConfig) -> Decimal {
-    if config.risk.base_size_pct > Decimal::ZERO {
-        config.risk.base_size_usd / config.risk.base_size_pct
-    } else {
-        config.risk.base_size_usd
+    config.paper.starting_balance_usd
+}
+
+fn f64_to_decimal(value: f64) -> Decimal {
+    value.to_string().parse().unwrap_or(Decimal::ZERO)
+}
+
+fn realized_pnl_for_trade(manager: &positions::PositionManager, trade: &Trade) -> Decimal {
+    if !matches!(
+        trade.status,
+        TradeStatus::Filled | TradeStatus::PartiallyFilled
+    ) || trade.direction != polybot_common::types::TradeDirection::Sell
+        || trade.filled_size <= Decimal::ZERO
+    {
+        return Decimal::ZERO;
     }
+
+    manager
+        .get_position(&PositionKey::new(trade.market_id.clone(), trade.side))
+        .map(|position| ((trade.price - position.average_price) * trade.filled_size).round_dp(2))
+        .unwrap_or(Decimal::ZERO)
 }
 
 fn update_daily_stats(
@@ -48,8 +64,9 @@ fn update_daily_stats(
     config: &AppConfig,
     metrics: &Metrics,
     trade: &Trade,
+    realized_delta: Decimal,
     unrealized: Decimal,
-) -> Result<(), PolybotError> {
+) -> Result<sqlite::DailyStatsRow, PolybotError> {
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let mut stats = store
         .get_daily_stats(&date)?
@@ -67,6 +84,7 @@ fn update_daily_stats(
             notes: None,
         });
 
+    stats.realized_pnl += realized_delta;
     stats.unrealized_pnl = unrealized;
     stats.volume_traded += trade.size_usd;
     stats.trades_placed += 1;
@@ -82,7 +100,8 @@ fn update_daily_stats(
     stats.drawdown_pct = pnl::calculate_drawdown_pct(current_value, stats.starting_balance);
 
     metrics.update_drawdown(stats.drawdown_pct.to_f64().unwrap_or(0.0));
-    store.upsert_daily_stats(&stats)
+    store.upsert_daily_stats(&stats)?;
+    Ok(stats)
 }
 
 fn copied_lot_side_key(side: polybot_common::types::Side) -> &'static str {
@@ -301,8 +320,16 @@ async fn run_in_memory(
             }
         }
 
-        let (position_snapshot, current_price, open_positions, unrealized) = {
+        let (
+            position_snapshot,
+            current_price,
+            open_positions,
+            unrealized,
+            total_exposure,
+            realized_delta,
+        ) = {
             let mut position_manager = position_manager.lock().await;
+            let realized_delta = realized_pnl_for_trade(&position_manager, &trade);
             if let Err(e) = position_manager.update_from_trade(&trade) {
                 tracing::error!(error = %e, "Failed to update position from trade");
             }
@@ -315,6 +342,8 @@ async fn run_in_memory(
                 current_prices_in_memory.get(&trade.market_id).copied(),
                 position_manager.open_position_count(),
                 pnl::calculate_unrealized_pnl(&position_manager, &current_prices_in_memory),
+                position_manager.total_exposure(),
+                realized_delta,
             )
         };
 
@@ -350,13 +379,36 @@ async fn run_in_memory(
                 }
             }
 
-            if let Err(e) = update_daily_stats(store, config, &metrics, &trade, unrealized) {
-                tracing::error!(error = %e, "Failed to update SQLite daily stats");
+            match update_daily_stats(store, config, &metrics, &trade, realized_delta, unrealized) {
+                Ok(stats) => {
+                    let available = (stats.starting_balance + stats.realized_pnl - total_exposure)
+                        .max(Decimal::ZERO);
+                    metrics.update_v2_accounting(
+                        available,
+                        Decimal::ZERO,
+                        f64_to_decimal(metrics.fees_paid()),
+                        f64_to_decimal(metrics.rebates_earned()),
+                    );
+                    metrics.update_daily_pnl(
+                        (stats.realized_pnl + stats.unrealized_pnl)
+                            .to_f64()
+                            .unwrap_or(0.0),
+                    );
+                }
+                Err(e) => tracing::error!(error = %e, "Failed to update SQLite daily stats"),
             }
+        } else {
+            let available = (initial_starting_balance(config) - total_exposure).max(Decimal::ZERO);
+            metrics.update_v2_accounting(
+                available,
+                Decimal::ZERO,
+                f64_to_decimal(metrics.fees_paid()),
+                f64_to_decimal(metrics.rebates_earned()),
+            );
+            metrics.update_daily_pnl(unrealized.to_f64().unwrap_or(0.0));
         }
 
         metrics.set_open_positions(open_positions);
-        metrics.update_daily_pnl(unrealized.to_f64().unwrap_or(0.0));
         tracing::info!(unrealized_pnl = %unrealized, "Unrealized PnL updated");
     }
 
@@ -522,7 +574,7 @@ mod tests {
 
         run_in_memory(
             rx,
-            metrics,
+            metrics.clone(),
             position_manager,
             market_prices,
             Some(sqlite_path.to_string_lossy().as_ref()),
@@ -541,9 +593,11 @@ mod tests {
 
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let stats = reopened.get_daily_stats(&today).unwrap().unwrap();
+        assert_eq!(stats.starting_balance, dec!(1000));
         assert_eq!(stats.trades_placed, 1);
         assert_eq!(stats.trades_filled, 1);
         assert_eq!(stats.volume_traded, Decimal::new(500, 2));
+        assert!((metrics.virtual_pusd() - 995.0).abs() < 0.01);
 
         let _ = std::fs::remove_file(sqlite_path);
         std::env::remove_var("POLYBOT_SQLITE_PATH");
@@ -652,6 +706,55 @@ mod tests {
         let reopened = sqlite::SqliteStore::open(&sqlite_path).unwrap();
         let positions = reopened.list_open_positions().unwrap();
         assert!(positions.is_empty());
+
+        let _ = std::fs::remove_file(sqlite_path);
+        std::env::remove_var("POLYBOT_SQLITE_PATH");
+    }
+
+    #[tokio::test]
+    async fn paper_sell_fill_records_realized_pnl_and_restores_cash() {
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-state-{}.db", uuid::Uuid::new_v4()));
+        std::env::set_var("POLYBOT_SQLITE_PATH", &sqlite_path);
+
+        let metrics = Arc::new(Metrics::new());
+        metrics.update_v2_accounting(dec!(1000), Decimal::ZERO, Decimal::ZERO, Decimal::ZERO);
+        let position_manager = Arc::new(Mutex::new(positions::PositionManager::new()));
+        {
+            let mut manager = position_manager.lock().await;
+            manager
+                .update_from_trade(&test_trade("m1", Side::Yes, Category::Politics))
+                .unwrap();
+        }
+        let market_prices = Arc::new(RwLock::new(HashMap::new()));
+        let (tx, rx) = mpsc::channel(4);
+        let config = AppConfig::default();
+
+        let mut sell =
+            test_trade_with_direction("m1", Side::Yes, Category::Politics, TradeDirection::Sell);
+        sell.price = dec!(0.60);
+        sell.size_usd = dec!(6.00);
+
+        tx.send(sell).await.unwrap();
+        drop(tx);
+
+        run_in_memory(
+            rx,
+            metrics.clone(),
+            position_manager,
+            market_prices,
+            Some(sqlite_path.to_string_lossy().as_ref()),
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let reopened = sqlite::SqliteStore::open(&sqlite_path).unwrap();
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let stats = reopened.get_daily_stats(&today).unwrap().unwrap();
+        assert_eq!(stats.realized_pnl, dec!(1.00));
+        assert!((metrics.daily_pnl_usd() - 1.0).abs() < 0.01);
+        assert!((metrics.virtual_pusd() - 1001.0).abs() < 0.01);
 
         let _ = std::fs::remove_file(sqlite_path);
         std::env::remove_var("POLYBOT_SQLITE_PATH");

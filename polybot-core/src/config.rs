@@ -69,6 +69,14 @@ fn default_fok_max_fee_bps() -> u32 {
     50
 }
 
+fn default_paper_starting_balance_usd() -> Decimal {
+    rust_decimal_macros::dec!(1000)
+}
+
+fn default_paper_fixed_entry_price() -> Decimal {
+    rust_decimal_macros::dec!(0.50)
+}
+
 fn default_max_position_politics_usdc() -> Decimal {
     rust_decimal_macros::dec!(250)
 }
@@ -88,6 +96,8 @@ pub struct AppConfig {
     pub risk: RiskConfig,
     pub scanner: ScannerConfig,
     pub execution: ExecutionConfig,
+    #[serde(default)]
+    pub paper: PaperConfig,
     pub telegram: TelegramConfig,
     pub dashboard: DashboardConfig,
     #[serde(default)]
@@ -174,6 +184,23 @@ pub struct ExecutionConfig {
     /// Set to 0 to disable FOK entirely.
     #[serde(default = "default_fok_max_fee_bps")]
     pub fok_max_fee_bps: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaperConfig {
+    #[serde(default = "default_paper_starting_balance_usd")]
+    pub starting_balance_usd: Decimal,
+    #[serde(default = "default_paper_fixed_entry_price")]
+    pub fixed_entry_price: Decimal,
+}
+
+impl Default for PaperConfig {
+    fn default() -> Self {
+        Self {
+            starting_balance_usd: default_paper_starting_balance_usd(),
+            fixed_entry_price: default_paper_fixed_entry_price(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -308,6 +335,7 @@ impl Default for AppConfig {
                 price_buffer: default_price_buffer(),
                 fok_max_fee_bps: default_fok_max_fee_bps(),
             },
+            paper: PaperConfig::default(),
             telegram: TelegramConfig {
                 allowed_user_ids: vec![],
                 command_rate_limit_per_min: 30,
@@ -414,6 +442,18 @@ impl AppConfig {
         if self.execution.price_buffer < Decimal::ZERO {
             return Err(PolybotError::Config(
                 "execution.price_buffer must be >= 0".to_string(),
+            ));
+        }
+        if self.paper.starting_balance_usd <= Decimal::ZERO {
+            return Err(PolybotError::Config(
+                "paper.starting_balance_usd must be > 0".to_string(),
+            ));
+        }
+        if self.paper.fixed_entry_price <= Decimal::ZERO
+            || self.paper.fixed_entry_price > Decimal::ONE
+        {
+            return Err(PolybotError::Config(
+                "paper.fixed_entry_price must be > 0 and <= 1".to_string(),
             ));
         }
         if self.scanner.dedup_window_secs == 0 {
@@ -547,6 +587,16 @@ impl AppConfig {
         if let Ok(val) = std::env::var("POLYBOT_PRICE_BUFFER") {
             if let Ok(d) = val.parse::<Decimal>() {
                 self.execution.price_buffer = d;
+            }
+        }
+        if let Ok(val) = std::env::var("POLYBOT_PAPER_STARTING_BALANCE_USD") {
+            if let Ok(d) = val.parse::<Decimal>() {
+                self.paper.starting_balance_usd = d;
+            }
+        }
+        if let Ok(val) = std::env::var("POLYBOT_PAPER_FIXED_ENTRY_PRICE") {
+            if let Ok(d) = val.parse::<Decimal>() {
+                self.paper.fixed_entry_price = d;
             }
         }
         if let Ok(val) = std::env::var("TELEGRAM_ALLOWED_USER_IDS")
@@ -906,6 +956,38 @@ port = 8080
     fn fok_max_fee_bps_defaults_to_50() {
         let config = AppConfig::default();
         assert_eq!(config.execution.fok_max_fee_bps, 50);
+    }
+
+    #[test]
+    fn paper_defaults_are_safe_for_simulation() {
+        let config = AppConfig::default();
+        assert_eq!(
+            config.paper.starting_balance_usd,
+            rust_decimal_macros::dec!(1000)
+        );
+        assert_eq!(
+            config.paper.fixed_entry_price,
+            rust_decimal_macros::dec!(0.50)
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn paper_config_reads_from_env() {
+        std::env::set_var("POLYBOT_PAPER_STARTING_BALANCE_USD", "2500");
+        std::env::set_var("POLYBOT_PAPER_FIXED_ENTRY_PRICE", "0.42");
+        let mut config = AppConfig::default();
+        config.apply_env_overrides();
+        assert_eq!(
+            config.paper.starting_balance_usd,
+            rust_decimal_macros::dec!(2500)
+        );
+        assert_eq!(
+            config.paper.fixed_entry_price,
+            rust_decimal_macros::dec!(0.42)
+        );
+        std::env::remove_var("POLYBOT_PAPER_STARTING_BALANCE_USD");
+        std::env::remove_var("POLYBOT_PAPER_FIXED_ENTRY_PRICE");
     }
 
     #[test]

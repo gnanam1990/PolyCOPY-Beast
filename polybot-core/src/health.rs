@@ -33,6 +33,7 @@ pub struct HealthState {
     pub metrics: Arc<Metrics>,
     pub sqlite_path: String,
     pub starting_balance: Decimal,
+    pub fixed_entry_price: Decimal,
     pub risk_engine: Arc<RiskEngine>,
     pub position_manager: Arc<Mutex<PositionManager>>,
     pub event_tx: broadcast::Sender<String>,
@@ -93,6 +94,8 @@ pub struct HealthResponse {
     pub balance_usd: String,
     pub virtual_pusd: String,
     pub reserved_pusd: String,
+    pub paper_starting_balance: String,
+    pub paper_fixed_entry_price: String,
     pub fees_paid: String,
     pub rebates_earned: String,
     pub live_disabled_reason: Option<String>,
@@ -183,7 +186,7 @@ pub async fn health_check(State(state): State<Arc<HealthState>>) -> Json<HealthR
                 match store.get_daily_stats(&today).ok().flatten() {
                     Some(stats) => {
                         let balance =
-                            stats.starting_balance + stats.realized_pnl + stats.unrealized_pnl;
+                            state.starting_balance + stats.realized_pnl + stats.unrealized_pnl;
                         (balance, stats.drawdown_pct * Decimal::new(100, 0))
                     }
                     None => (state.starting_balance, Decimal::ZERO),
@@ -210,6 +213,8 @@ pub async fn health_check(State(state): State<Arc<HealthState>>) -> Json<HealthR
         balance_usd: format!("{:.2}", balance_usd),
         virtual_pusd: format!("{:.2}", metrics.virtual_pusd()),
         reserved_pusd: format!("{:.2}", metrics.reserved_pusd()),
+        paper_starting_balance: format!("{:.2}", state.starting_balance),
+        paper_fixed_entry_price: format!("{:.2}", state.fixed_entry_price),
         fees_paid: format!("{:.2}", metrics.fees_paid()),
         rebates_earned: format!("{:.2}", metrics.rebates_earned()),
         live_disabled_reason: state
@@ -663,6 +668,7 @@ mod tests {
 
     fn test_health_state(sqlite_path: String) -> Arc<HealthState> {
         let metrics = Arc::new(Metrics::new());
+        metrics.update_v2_accounting(dec!(1000), Decimal::ZERO, Decimal::ZERO, Decimal::ZERO);
         let position_manager = Arc::new(Mutex::new(PositionManager::new()));
         let risk_engine = Arc::new(RiskEngine::new(
             Arc::new(AppConfig::default()),
@@ -678,6 +684,7 @@ mod tests {
             metrics,
             sqlite_path,
             starting_balance: dec!(1000),
+            fixed_entry_price: dec!(0.50),
             risk_engine,
             position_manager,
             event_tx: tokio::sync::broadcast::channel(2).0,
@@ -692,12 +699,43 @@ mod tests {
 
         let response = health_check(State(state)).await.0;
         assert_eq!(response.balance_usd, "1000.00");
-        assert_eq!(response.virtual_pusd, "0.00");
+        assert_eq!(response.virtual_pusd, "1000.00");
         assert_eq!(response.reserved_pusd, "0.00");
+        assert_eq!(response.paper_starting_balance, "1000.00");
+        assert_eq!(response.paper_fixed_entry_price, "0.50");
         assert_eq!(response.fees_paid, "0.00");
         assert_eq!(response.rebates_earned, "0.00");
         assert!(response.live_disabled_reason.is_some());
         assert_eq!(response.drawdown_pct, "0.00");
+
+        let _ = std::fs::remove_file(sqlite_path);
+    }
+
+    #[tokio::test]
+    async fn health_check_uses_configured_starting_balance_over_stale_sqlite() {
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-health-stale-{}.db", uuid::Uuid::new_v4()));
+        let state = test_health_state(sqlite_path.to_string_lossy().to_string());
+        let store = SqliteStore::open(&sqlite_path).unwrap();
+        store
+            .upsert_daily_stats(&crate::state::sqlite::DailyStatsRow {
+                date: chrono::Utc::now().format("%Y-%m-%d").to_string(),
+                starting_balance: dec!(333.33),
+                realized_pnl: dec!(0),
+                unrealized_pnl: dec!(0),
+                volume_traded: dec!(0),
+                trades_placed: 0,
+                trades_filled: 0,
+                trades_rejected: 0,
+                drawdown_pct: dec!(0),
+                paused_at: None,
+                notes: None,
+            })
+            .unwrap();
+
+        let response = health_check(State(state)).await.0;
+
+        assert_eq!(response.balance_usd, "1000.00");
 
         let _ = std::fs::remove_file(sqlite_path);
     }
@@ -823,6 +861,7 @@ mod tests {
             metrics,
             sqlite_path: sqlite_path.to_string_lossy().to_string(),
             starting_balance: dec!(1000),
+            fixed_entry_price: dec!(0.50),
             risk_engine,
             position_manager,
             event_tx: tokio::sync::broadcast::channel(2).0,

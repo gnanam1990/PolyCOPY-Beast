@@ -42,6 +42,10 @@ heartbeat_interval_secs = 30
 order_timeout_secs = 30
 price_buffer = 0.01
 
+[paper]
+starting_balance_usd = 1000
+fixed_entry_price = 0.50
+
 [telegram]
 allowed_user_ids = []
 command_rate_limit_per_min = 30

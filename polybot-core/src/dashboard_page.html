@@ -1276,7 +1276,7 @@
           <article class="card stat">
             <div class="stat-top"><span class="label">Virtual pUSD</span><span class="info">i</span></div>
             <div class="value" id="virtual-pusd-value">$--</div>
-            <div class="sub">available</div>
+            <div class="sub" id="paper-start-sub">paper start $--</div>
           </article>
           <article class="card stat">
             <div class="stat-top"><span class="label">Reserved pUSD</span><span class="info">i</span></div>
@@ -1686,6 +1686,7 @@
           setText("pnl-value", money(health.daily_pnl));
           setText("virtual-pusd-value", money(health.virtual_pusd));
           setText("reserved-pusd-value", money(health.reserved_pusd));
+          setText("paper-start-sub", "start " + money(health.paper_starting_balance) + " @ fixed " + money(health.paper_fixed_entry_price));
           setText("drawdown-value", (num(health.drawdown_pct)).toFixed(2) + "%");
           setText("drawdown-sub", (num(health.drawdown_pct)).toFixed(2) + "% peak");
           setText("pnl-sub", num(health.balance_usd) > 0 ? ((num(health.daily_pnl) / num(health.balance_usd)) * 100).toFixed(2) + "%" : "0.00%");
