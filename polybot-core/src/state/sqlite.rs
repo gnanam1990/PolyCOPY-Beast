@@ -1658,6 +1658,7 @@ mod tests {
             resolved: false,
             redeemable: false,
             suggested_size_usdc: None,
+            fee_schedule: None,
             scanner_version: "1.0.0".to_string(),
         };
 
@@ -1687,6 +1688,14 @@ mod tests {
             placed_at: chrono::Utc::now(),
             filled_at: Some(chrono::Utc::now()),
             simulated: true,
+            transaction_id: None,
+            transaction_hash: None,
+            relayer_state: None,
+            taker_fee_bps: 0,
+            fee_paid_usdc: Decimal::ZERO,
+            rebate_usdc: Decimal::ZERO,
+            retry_count: 0,
+            error_msg: None,
         };
 
         store.insert_trade(&trade).unwrap();
