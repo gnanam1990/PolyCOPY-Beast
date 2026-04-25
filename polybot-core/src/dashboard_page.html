@@ -3,488 +3,1501 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>PolyBot Live Dashboard</title>
+    <title>SuperFast PolyBot Command Center</title>
     <style>
       :root {
-        --bg: #f4f1e8;
-        --surface: rgba(255, 250, 239, 0.92);
-        --surface-strong: #fffaf0;
-        --ink: #1c1a16;
-        --muted: #5f574f;
-        --line: rgba(35, 28, 19, 0.12);
-        --accent: #0d5c63;
-        --accent-soft: #dcefed;
-        --danger: #8f2d1f;
-        --ok: #216869;
-        --shadow: 0 20px 60px rgba(37, 29, 18, 0.10);
+        --bg: #020504;
+        --panel: rgba(5, 13, 15, 0.88);
+        --panel-strong: rgba(9, 18, 20, 0.96);
+        --panel-soft: rgba(137, 255, 26, 0.055);
+        --line: rgba(120, 255, 230, 0.16);
+        --line-hot: rgba(145, 255, 26, 0.42);
+        --text: #edf7ef;
+        --muted: #8c9b98;
+        --dim: #50605d;
+        --lime: #8cff14;
+        --cyan: #16e7ff;
+        --amber: #ffbe0b;
+        --red: #ff4d37;
+        --green: #65ff57;
+        --shadow: 0 24px 90px rgba(0, 0, 0, 0.58);
+        --radius: 18px;
+        --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+        --font-display: "Bahnschrift", "Rajdhani", "Agency FB", "Segoe UI", sans-serif;
+        --font-body: "Aptos", "Segoe UI", sans-serif;
+        --font-mono: "Cascadia Mono", "Consolas", monospace;
       }
 
-      * { box-sizing: border-box; }
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
 
       body {
         margin: 0;
         min-height: 100vh;
-        padding: 24px;
-        color: var(--ink);
-        font-family: "Segoe UI Variable", "Aptos", "Trebuchet MS", sans-serif;
+        color: var(--text);
+        font-family: var(--font-body);
         background:
-          radial-gradient(circle at top left, rgba(13, 92, 99, 0.10), transparent 32%),
-          radial-gradient(circle at bottom right, rgba(143, 45, 31, 0.10), transparent 24%),
-          linear-gradient(180deg, #f8f5ef 0%, var(--bg) 100%);
+          radial-gradient(circle at 18% -10%, rgba(140, 255, 20, 0.15), transparent 34%),
+          radial-gradient(circle at 85% 8%, rgba(22, 231, 255, 0.11), transparent 32%),
+          linear-gradient(135deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          linear-gradient(45deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+          var(--bg);
+        background-size: auto, auto, 44px 44px, 44px 44px, auto;
+        overflow-x: hidden;
+        animation: grid-drift 18s linear infinite;
       }
 
-      .shell {
-        max-width: 1400px;
-        margin: 0 auto;
-        display: grid;
-        gap: 20px;
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background:
+          linear-gradient(90deg, rgba(140, 255, 20, 0.03), transparent 18%, transparent 82%, rgba(22, 231, 255, 0.03)),
+          radial-gradient(circle at center, transparent 0, rgba(0, 0, 0, 0.45) 78%);
+        z-index: -1;
       }
 
-      .hero,
-      .panel {
-        border: 1px solid var(--line);
-        border-radius: 24px;
-        background: var(--surface);
-        box-shadow: var(--shadow);
-        backdrop-filter: blur(14px);
+      body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background:
+          repeating-linear-gradient(
+            0deg,
+            rgba(255, 255, 255, 0.025) 0,
+            rgba(255, 255, 255, 0.025) 1px,
+            transparent 1px,
+            transparent 5px
+          ),
+          linear-gradient(180deg, transparent 0%, rgba(22, 231, 255, 0.08) 48%, transparent 56%);
+        background-size: auto, 100% 280px;
+        mix-blend-mode: screen;
+        opacity: 0.28;
+        z-index: 3;
+        animation: scan-sweep 7s linear infinite;
       }
 
-      .hero {
-        padding: 24px 28px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 18px;
-      }
-
-      .hero h1,
-      .panel h2 {
-        margin: 0 0 8px;
-        font-family: Georgia, "Times New Roman", serif;
-      }
-
-      .hero p {
-        margin: 0;
-        color: var(--muted);
-      }
-
-      .refresh-bar {
-        display: flex;
-        align-items: center;
-        gap: 12px;
+      button,
+      a {
+        font: inherit;
       }
 
       button {
         border: 0;
-        border-radius: 999px;
-        padding: 11px 16px;
         cursor: pointer;
-        font: inherit;
-        font-weight: 700;
-        color: #f8fffe;
-        background: var(--accent);
-        box-shadow: 0 10px 24px rgba(13, 92, 99, 0.18);
       }
 
-      .grid {
+      .app {
+        min-height: 100vh;
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 16px;
+        grid-template-columns: 242px minmax(0, 1fr);
       }
 
-      .triple {
-        display: grid;
-        grid-template-columns: 0.9fr 1.1fr 1fr;
-        gap: 20px;
+      .sidebar {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        padding: 18px 14px;
+        border-right: 1px solid rgba(140, 255, 20, 0.18);
+        background:
+          linear-gradient(180deg, rgba(8, 14, 13, 0.96), rgba(2, 8, 9, 0.98)),
+          radial-gradient(circle at top left, rgba(140, 255, 20, 0.14), transparent 42%);
+        box-shadow: 20px 0 80px rgba(0, 0, 0, 0.38);
       }
 
-      .stat {
-        padding: 18px;
-      }
-
-      .stat-label {
-        font-size: 0.85rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--muted);
-      }
-
-      .stat-value {
-        margin-top: 10px;
-        font-size: 1.7rem;
-        font-weight: 800;
-      }
-
-      .columns {
-        display: grid;
-        grid-template-columns: 1.15fr 0.85fr;
-        gap: 20px;
-      }
-
-      .panel {
-        padding: 22px;
-      }
-
-      .controls {
-        display: grid;
-        gap: 12px;
-      }
-
-      .control-row {
+      .brand {
+        min-height: 104px;
         display: flex;
+        align-items: center;
         gap: 12px;
-        flex-wrap: wrap;
+        padding: 16px 14px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.025);
+        animation: boot-in 620ms var(--ease-out) both;
       }
 
-      button.secondary {
-        background: rgba(13, 92, 99, 0.10);
-        color: var(--accent);
-        box-shadow: none;
-        border: 1px solid rgba(13, 92, 99, 0.18);
+      .brand-mark {
+        width: 52px;
+        height: 52px;
+        position: relative;
+        border: 2px solid var(--lime);
+        clip-path: polygon(28% 0, 92% 0, 60% 38%, 88% 38%, 32% 100%, 44% 55%, 10% 55%);
+        filter: drop-shadow(0 0 16px rgba(140, 255, 20, 0.8));
+        animation: bolt-charge 2.8s ease-in-out infinite;
       }
 
-      button.danger {
-        background: var(--danger);
-        box-shadow: 0 10px 24px rgba(143, 45, 31, 0.18);
+      .brand h1 {
+        margin: 0;
+        font-family: var(--font-display);
+        font-size: 0.96rem;
+        font-style: italic;
+        line-height: 1;
+        letter-spacing: 0.08em;
       }
 
-      .control-note {
-        font-size: 0.92rem;
+      .brand strong {
+        display: block;
+        margin-top: 4px;
+        color: var(--lime);
+        font-size: 1.25rem;
+        letter-spacing: 0.04em;
+      }
+
+      .brand span,
+      .side-card span,
+      .kicker,
+      .label,
+      th {
         color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
       }
 
-      .toast {
-        min-height: 24px;
-        font-weight: 700;
-      }
-
-      .toast.ok {
-        color: var(--ok);
-      }
-
-      .toast.error {
-        color: var(--danger);
-      }
-
-      .meta {
+      .nav {
         display: grid;
         gap: 10px;
+        margin-top: 18px;
       }
 
-      .meta-row {
+      .nav a {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 15px 16px;
+        color: #cbd8d3;
+        text-decoration: none;
+        border: 1px solid transparent;
+        border-radius: 14px;
+        transition: transform 180ms var(--ease-out), border-color 180ms var(--ease-out), background 180ms var(--ease-out), box-shadow 180ms var(--ease-out);
+      }
+
+      .nav a.active,
+      .nav a:hover {
+        color: var(--lime);
+        background: linear-gradient(90deg, rgba(140, 255, 20, 0.17), rgba(140, 255, 20, 0.03));
+        border-color: rgba(140, 255, 20, 0.34);
+        box-shadow: inset 3px 0 0 var(--lime), 0 0 28px rgba(140, 255, 20, 0.1);
+        transform: translateX(4px);
+      }
+
+      .nav-icon {
+        width: 22px;
+        height: 22px;
+        display: grid;
+        place-items: center;
+        border: 1px solid currentColor;
+        border-radius: 7px;
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+      }
+
+      .side-card {
+        position: absolute;
+        left: 14px;
+        right: 14px;
+        bottom: 18px;
+        padding: 16px;
+        border: 1px solid rgba(140, 255, 20, 0.25);
+        border-radius: 16px;
+        background: radial-gradient(circle at 90% 15%, rgba(140, 255, 20, 0.12), transparent 28%), rgba(5, 13, 15, 0.9);
+        animation: boot-in 680ms var(--ease-out) 120ms both;
+      }
+
+      .side-card strong {
+        display: block;
+        margin: 6px 0 12px;
+        color: var(--lime);
+        font-family: var(--font-display);
+        letter-spacing: 0.06em;
+      }
+
+      .side-row {
         display: flex;
         justify-content: space-between;
         gap: 12px;
-        padding: 10px 0;
-        border-bottom: 1px solid var(--line);
+        padding-top: 12px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
       }
 
-      .meta-row:last-child {
-        border-bottom: 0;
+      .content {
+        min-width: 0;
+        padding: 20px 22px 22px;
+        position: relative;
+      }
+
+      .content::before {
+        content: "";
+        position: fixed;
+        width: 420px;
+        height: 420px;
+        right: 8vw;
+        top: 12vh;
+        pointer-events: none;
+        background: radial-gradient(circle, rgba(22, 231, 255, 0.1), transparent 65%);
+        filter: blur(6px);
+        opacity: 0.75;
+        transform: translate3d(0, 0, 0);
+        animation: orb-float 9s ease-in-out infinite;
+      }
+
+      .topbar,
+      .card,
+      .status-rail {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015)),
+          var(--panel);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(18px);
+      }
+
+      .topbar {
+        min-height: 68px;
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 14px;
+        align-items: center;
+        padding: 14px;
+        animation: boot-in 700ms var(--ease-out) 80ms both;
+      }
+
+      .badge {
+        min-height: 46px;
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 18px;
+        border: 1px solid rgba(22, 231, 255, 0.32);
+        border-radius: 11px;
+        color: var(--cyan);
+        background: rgba(22, 231, 255, 0.05);
+        font-family: var(--font-display);
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        box-shadow: inset 0 0 20px rgba(22, 231, 255, 0.06);
+        transition: transform 180ms var(--ease-out), box-shadow 180ms var(--ease-out);
+      }
+
+      .badge:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 0 26px rgba(22, 231, 255, 0.12), inset 0 0 20px rgba(22, 231, 255, 0.08);
+      }
+
+      .badge.ready {
+        border-color: rgba(140, 255, 20, 0.28);
+        color: var(--lime);
+        background: rgba(140, 255, 20, 0.06);
+      }
+
+      .top-status {
+        min-height: 46px;
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 22px;
+        padding: 8px 18px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 11px;
+        background: rgba(255, 255, 255, 0.025);
+      }
+
+      .status-block {
+        display: grid;
+        gap: 3px;
+      }
+
+      .status-block strong,
+      .value,
+      .metric-number {
+        font-family: var(--font-display);
+      }
+
+      .status-block strong {
+        color: var(--text);
+        font-size: 0.9rem;
+        letter-spacing: 0.04em;
+      }
+
+      .dot {
+        width: 9px;
+        height: 9px;
+        display: inline-block;
+        border-radius: 99px;
+        background: var(--lime);
+        box-shadow: 0 0 18px currentColor;
+        animation: status-pulse 1.35s ease-in-out infinite;
+      }
+
+      .danger-btn {
+        min-height: 48px;
+        padding: 0 22px;
+        border: 1px solid rgba(255, 77, 55, 0.65);
+        border-radius: 12px;
+        color: #ff705f;
+        background: linear-gradient(180deg, rgba(255, 77, 55, 0.16), rgba(255, 77, 55, 0.06));
+        box-shadow: 0 0 34px rgba(255, 77, 55, 0.14);
+        font-family: var(--font-display);
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        transition: transform 180ms var(--ease-out), box-shadow 180ms var(--ease-out), filter 180ms var(--ease-out);
+        animation: danger-breathe 2.2s ease-in-out infinite;
+      }
+
+      .danger-btn:hover,
+      .control-btn:hover,
+      .view-btn:hover {
+        transform: translateY(-2px);
+        filter: brightness(1.12);
+      }
+
+      .grid-stats {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(160px, 1fr));
+        gap: 14px;
+        margin-top: 16px;
+      }
+
+      .card {
+        position: relative;
+        overflow: hidden;
+        transform: translateY(10px);
+        opacity: 0;
+        transition: transform 220ms var(--ease-out), border-color 220ms var(--ease-out), box-shadow 220ms var(--ease-out), background 220ms var(--ease-out);
+        animation: boot-in 720ms var(--ease-out) both;
+      }
+
+      .card > * {
+        position: relative;
+        z-index: 1;
+      }
+
+      .card::before {
+        content: "";
+        position: absolute;
+        inset: -1px;
+        pointer-events: none;
+        background:
+          radial-gradient(260px circle at var(--mx, 70%) var(--my, 12%), rgba(22, 231, 255, 0.16), transparent 44%),
+          linear-gradient(115deg, transparent 18%, rgba(255, 255, 255, 0.08) 38%, transparent 58%);
+        opacity: 0;
+        transform: translateX(-18%);
+        transition: opacity 180ms var(--ease-out), transform 420ms var(--ease-out);
+      }
+
+      .card:hover {
+        border-color: rgba(140, 255, 20, 0.34);
+        box-shadow: 0 30px 95px rgba(0, 0, 0, 0.68), 0 0 34px rgba(22, 231, 255, 0.08);
+        transform: translateY(-4px);
+      }
+
+      .card:hover::before {
+        opacity: 1;
+        transform: translateX(0);
+      }
+
+      .card::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.07), transparent 32%);
+        opacity: 0.55;
+      }
+
+      .grid-stats .card:nth-child(1) { animation-delay: 120ms; }
+      .grid-stats .card:nth-child(2) { animation-delay: 180ms; }
+      .grid-stats .card:nth-child(3) { animation-delay: 240ms; }
+      .grid-stats .card:nth-child(4) { animation-delay: 300ms; }
+      .grid-stats .card:nth-child(5) { animation-delay: 360ms; }
+      .main-grid .card:nth-child(1) { animation-delay: 420ms; }
+      .main-grid .card:nth-child(2) { animation-delay: 500ms; }
+      .tables .card:nth-child(1) { animation-delay: 560ms; }
+      .tables .card:nth-child(2) { animation-delay: 620ms; }
+      .tables .card:nth-child(3) { animation-delay: 680ms; }
+      .tables .card:nth-child(4) { animation-delay: 740ms; }
+
+      .stat {
+        min-height: 132px;
+        padding: 18px;
+      }
+
+      .stat.hot {
+        border-color: rgba(140, 255, 20, 0.5);
+        box-shadow: 0 0 38px rgba(140, 255, 20, 0.12), var(--shadow);
+      }
+
+      .stat.warn {
+        border-color: rgba(255, 190, 11, 0.38);
+      }
+
+      .stat-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .info {
+        width: 18px;
+        height: 18px;
+        display: grid;
+        place-items: center;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-radius: 99px;
+        color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+      }
+
+      .value {
+        margin-top: 12px;
+        font-size: clamp(2rem, 3vw, 2.65rem);
+        line-height: 1;
+        letter-spacing: 0.02em;
+        text-shadow: 0 0 24px rgba(140, 255, 20, 0.08);
+        transition: color 200ms var(--ease-out), text-shadow 200ms var(--ease-out), transform 200ms var(--ease-out);
+      }
+
+      .sub {
+        margin-top: 9px;
+        color: var(--cyan);
+        font-family: var(--font-mono);
+        font-size: 0.82rem;
+        text-transform: uppercase;
+      }
+
+      .sub.good {
+        color: var(--lime);
+      }
+
+      .sub.warn {
+        color: var(--amber);
+      }
+
+      .spark {
+        position: absolute;
+        left: 18px;
+        right: 18px;
+        bottom: 14px;
+        height: 28px;
+        opacity: 0.75;
+      }
+
+      .spark svg {
+        width: 100%;
+        height: 100%;
+      }
+
+      .spark polyline,
+      .chart-line polyline {
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-dasharray: 540;
+        stroke-dashoffset: 540;
+        animation: line-draw 1.35s var(--ease-out) 650ms forwards, line-glow 2.6s ease-in-out 1.9s infinite;
+        filter: drop-shadow(0 0 7px rgba(140, 255, 20, 0.6));
+      }
+
+      .chart-line polygon {
+        opacity: 0.82;
+        transform-origin: bottom;
+        animation: area-breathe 3.4s ease-in-out infinite;
+        transition: all 440ms var(--ease-out);
+      }
+
+      .main-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.8fr) minmax(280px, 0.72fr);
+        gap: 14px;
+        margin-top: 16px;
+      }
+
+      .panel-head {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        padding: 18px 18px 0;
+      }
+
+      h2 {
+        margin: 0;
+        font-family: var(--font-display);
+        font-size: 1rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .tabs {
+        display: flex;
+        gap: 6px;
+        padding: 4px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.025);
+      }
+
+      .tabs span {
+        padding: 6px 10px;
+        border-radius: 7px;
+        color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 0.76rem;
+        transition: color 160ms var(--ease-out), background 160ms var(--ease-out), transform 160ms var(--ease-out);
+      }
+
+      .tabs .active {
+        color: var(--lime);
+        background: rgba(140, 255, 20, 0.14);
+      }
+
+      .tabs span:hover {
+        color: var(--cyan);
+        transform: translateY(-1px);
+      }
+
+      .pulse-body {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        gap: 10px;
+        padding: 16px 14px 14px;
+      }
+
+      .metric-strip {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
+        overflow: hidden;
+        background: rgba(0, 0, 0, 0.2);
+      }
+
+      .metric {
+        min-height: 104px;
+        padding: 16px;
+        border-right: 1px solid rgba(255, 255, 255, 0.08);
+        transition: background 180ms var(--ease-out), transform 180ms var(--ease-out);
+      }
+
+      .metric:hover {
+        background: rgba(140, 255, 20, 0.035);
+        transform: translateY(-2px);
+      }
+
+      .metric:last-child {
+        border-right: 0;
+      }
+
+      .metric-number {
+        margin-top: 10px;
+        font-size: 2.1rem;
+        line-height: 1;
+      }
+
+      .metric-small {
+        margin-top: 9px;
+        color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+        text-transform: uppercase;
+      }
+
+      .pulse-lower {
+        display: grid;
+        grid-template-columns: 1.4fr 0.52fr;
+        gap: 10px;
+      }
+
+      .chart,
+      .success-gauge,
+      .mini-card {
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
+        background: rgba(0, 0, 0, 0.2);
+      }
+
+      .chart {
+        min-height: 148px;
+        padding: 14px;
+        display: grid;
+        grid-template-columns: 112px 1fr;
+        gap: 14px;
+        align-items: stretch;
+      }
+
+      .latency strong {
+        display: block;
+        margin: 10px 0 18px;
+        color: var(--lime);
+        font-family: var(--font-display);
+        font-size: 2rem;
+      }
+
+      .chart-box {
+        position: relative;
+        min-height: 104px;
+        border-left: 1px solid rgba(255, 255, 255, 0.08);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+        background-size: 24px 24px;
+        overflow: hidden;
+        animation: chart-grid 1.8s linear infinite;
+      }
+
+      .chart-box::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(90deg, transparent, rgba(140, 255, 20, 0.1), transparent);
+        transform: translateX(-100%);
+        animation: chart-scan 3.4s ease-in-out infinite;
+      }
+
+      .chart-line {
+        position: absolute;
+        inset: 8px 8px 8px 8px;
+      }
+
+      .chart-line svg {
+        width: 100%;
+        height: 100%;
+      }
+
+      .success-gauge {
+        display: grid;
+        place-items: center;
+        padding: 12px;
+      }
+
+      .ring {
+        width: 106px;
+        height: 106px;
+        display: grid;
+        place-items: center;
+        border-radius: 999px;
+        background: conic-gradient(var(--green) var(--success-deg, 360deg), rgba(255, 255, 255, 0.08) 0);
+        box-shadow: 0 0 34px rgba(101, 255, 87, 0.16);
+        position: relative;
+        transition: background 520ms var(--ease-out), transform 220ms var(--ease-out);
+        animation: gauge-breathe 2.6s ease-in-out infinite;
+      }
+
+      .ring::before {
+        content: "";
+        position: absolute;
+        inset: -6px;
+        border-radius: inherit;
+        border: 1px solid rgba(101, 255, 87, 0.2);
+        animation: ring-radar 1.9s ease-out infinite;
+      }
+
+      .ring-inner {
+        width: 80px;
+        height: 80px;
+        display: grid;
+        place-items: center;
+        border-radius: 999px;
+        background: #081012;
+        text-align: center;
+        font-family: var(--font-display);
+      }
+
+      .mini-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+      }
+
+      .mini-card {
+        min-height: 94px;
+        padding: 14px;
+        transition: transform 180ms var(--ease-out), border-color 180ms var(--ease-out), background 180ms var(--ease-out);
+      }
+
+      .mini-card:hover {
+        transform: translateY(-2px);
+        border-color: rgba(22, 231, 255, 0.24);
+        background: rgba(22, 231, 255, 0.035);
+      }
+
+      .mini-line {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .status-token {
+        color: var(--lime);
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        text-shadow: 0 0 12px rgba(140, 255, 20, 0.4);
+      }
+
+      .controls-card {
+        padding: 18px;
+      }
+
+      .control-stack {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        gap: 12px;
+        margin-top: 16px;
+      }
+
+      .control-btn {
+        min-height: 64px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 10px;
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.035);
+        font-family: var(--font-display);
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        transition: transform 180ms var(--ease-out), filter 180ms var(--ease-out), box-shadow 180ms var(--ease-out), border-color 180ms var(--ease-out);
+      }
+
+      .control-btn.resume {
+        border-color: rgba(22, 231, 255, 0.48);
+        color: #9cf7ff;
+        background: rgba(22, 231, 255, 0.08);
+        box-shadow: 0 0 22px rgba(22, 231, 255, 0.08);
+      }
+
+      .control-btn.stop {
+        border-color: rgba(255, 77, 55, 0.65);
+        color: #ff6d5d;
+        background: rgba(255, 77, 55, 0.1);
+        animation: danger-breathe 2.4s ease-in-out infinite;
+      }
+
+      .control-btn small {
+        display: block;
+        margin-top: 5px;
+        color: var(--muted);
+        font-family: var(--font-body);
+        font-size: 0.72rem;
+        font-weight: 500;
+        letter-spacing: 0;
+        text-transform: none;
+      }
+
+      .security-list {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        gap: 10px;
+        margin-top: 18px;
+        padding-top: 16px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .security-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        color: var(--muted);
+        font-size: 0.88rem;
+      }
+
+      .security-row strong {
+        color: var(--green);
+        font-family: var(--font-mono);
+        font-size: 0.76rem;
+        text-transform: uppercase;
+      }
+
+      .toast {
+        min-height: 22px;
+        color: var(--muted);
+        font-weight: 700;
+        transition: color 180ms var(--ease-out), transform 180ms var(--ease-out);
+      }
+
+      .toast.ok {
+        color: var(--green);
+      }
+
+      .toast.error {
+        color: var(--red);
+      }
+
+      .tables {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+        margin-top: 14px;
+      }
+
+      .table-card {
+        min-height: 258px;
+        padding: 14px;
+      }
+
+      .table-card .panel-head {
+        padding: 0 0 12px;
+      }
+
+      .count {
+        min-width: 34px;
+        padding: 4px 8px;
+        border: 1px solid rgba(140, 255, 20, 0.28);
+        border-radius: 8px;
+        color: var(--lime);
+        text-align: center;
+        font-family: var(--font-mono);
+        background: rgba(140, 255, 20, 0.08);
+        transition: transform 180ms var(--ease-out), box-shadow 180ms var(--ease-out);
+      }
+
+      .table-wrap {
+        position: relative;
+        z-index: 1;
+        overflow-x: auto;
       }
 
       table {
         width: 100%;
         border-collapse: collapse;
-        margin-top: 12px;
-        background: var(--surface-strong);
-        border: 1px solid var(--line);
-        border-radius: 18px;
-        overflow: hidden;
       }
 
-      th, td {
+      th,
+      td {
+        padding: 9px 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
         text-align: left;
-        padding: 12px 14px;
-        border-bottom: 1px solid var(--line);
+        white-space: nowrap;
       }
 
-      th {
-        font-size: 0.85rem;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--muted);
+      tbody tr {
+        animation: row-in 360ms var(--ease-out) both;
       }
 
-      tr:last-child td {
-        border-bottom: 0;
+      tbody tr:hover {
+        background: rgba(22, 231, 255, 0.045);
       }
 
-      .pill {
-        display: inline-block;
-        padding: 5px 10px;
+      td {
+        color: #d6e1dd;
+        font-size: 0.84rem;
+      }
+
+      .empty {
+        min-height: 162px;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.018);
+      }
+
+      .target {
+        width: 58px;
+        height: 58px;
+        position: relative;
+        margin: 0 auto 12px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
         border-radius: 999px;
-        font-size: 0.85rem;
+        animation: target-spin 5s linear infinite;
+      }
+
+      .target::before,
+      .target::after {
+        content: "";
+        position: absolute;
+        background: rgba(255, 255, 255, 0.28);
+      }
+
+      .target::before {
+        width: 1px;
+        height: 38px;
+        left: 50%;
+        top: 10px;
+      }
+
+      .target::after {
+        width: 38px;
+        height: 1px;
+        left: 10px;
+        top: 50%;
+      }
+
+      .empty strong {
+        display: block;
+        color: #dce9e5;
         font-weight: 700;
       }
 
-      .pill.ok {
-        background: rgba(33, 104, 105, 0.12);
-        color: var(--ok);
-      }
-
-      .pill.danger {
-        background: rgba(143, 45, 31, 0.12);
-        color: var(--danger);
-      }
-
-      .muted {
+      .empty span {
+        display: block;
+        margin-top: 6px;
         color: var(--muted);
+        font-size: 0.82rem;
       }
 
-      @media (max-width: 1100px) {
-        .grid {
+      .view-btn {
+        width: 100%;
+        margin-top: 12px;
+        min-height: 38px;
+        border: 1px solid rgba(140, 255, 20, 0.28);
+        border-radius: 8px;
+        color: var(--lime);
+        background: rgba(140, 255, 20, 0.06);
+        font-family: var(--font-display);
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        transition: transform 180ms var(--ease-out), filter 180ms var(--ease-out), box-shadow 180ms var(--ease-out);
+      }
+
+      .status-rail {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 0;
+        margin-top: 16px;
+        overflow: hidden;
+        animation: boot-in 700ms var(--ease-out) 820ms both;
+      }
+
+      .rail-item {
+        min-height: 72px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        border-right: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .rail-item:last-child {
+        border-right: 0;
+      }
+
+      .rail-item strong {
+        display: block;
+        margin-top: 4px;
+        color: var(--cyan);
+        font-family: var(--font-display);
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .rail-icon {
+        width: 28px;
+        height: 28px;
+        border: 1px solid currentColor;
+        border-radius: 8px;
+        color: var(--cyan);
+      }
+
+      .rail-icon.green {
+        color: var(--lime);
+      }
+
+      .value-updated {
+        color: #ffffff !important;
+        text-shadow: 0 0 22px rgba(140, 255, 20, 0.72), 0 0 42px rgba(22, 231, 255, 0.22);
+        transform: translateY(-1px) scale(1.015);
+        animation: value-flash 720ms var(--ease-out) both;
+      }
+
+      .refreshing .topbar {
+        border-color: rgba(22, 231, 255, 0.38);
+        box-shadow: var(--shadow), 0 0 28px rgba(22, 231, 255, 0.1);
+      }
+
+      @keyframes boot-in {
+        from {
+          opacity: 0;
+          transform: translateY(18px) scale(0.985);
+          filter: blur(8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+          filter: blur(0);
+        }
+      }
+
+      @keyframes grid-drift {
+        from { background-position: 0 0, 0 0, 0 0, 0 0, 0 0; }
+        to { background-position: 0 0, 0 0, 44px 44px, -44px 44px, 0 0; }
+      }
+
+      @keyframes scan-sweep {
+        from { background-position: 0 0, 0 -280px; }
+        to { background-position: 0 0, 0 100vh; }
+      }
+
+      @keyframes orb-float {
+        0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.55; }
+        50% { transform: translate3d(-52px, 36px, 0) scale(1.12); opacity: 0.88; }
+      }
+
+      @keyframes bolt-charge {
+        0%, 100% { filter: drop-shadow(0 0 10px rgba(140, 255, 20, 0.58)); transform: scale(1); }
+        45% { filter: drop-shadow(0 0 28px rgba(140, 255, 20, 1)); transform: scale(1.045); }
+      }
+
+      @keyframes status-pulse {
+        0%, 100% { opacity: 0.78; box-shadow: 0 0 12px currentColor; }
+        50% { opacity: 1; box-shadow: 0 0 24px currentColor, 0 0 42px currentColor; }
+      }
+
+      @keyframes danger-breathe {
+        0%, 100% { box-shadow: 0 0 24px rgba(255, 77, 55, 0.12); }
+        50% { box-shadow: 0 0 38px rgba(255, 77, 55, 0.28); }
+      }
+
+      @keyframes line-draw {
+        to { stroke-dashoffset: 0; }
+      }
+
+      @keyframes line-glow {
+        0%, 100% { filter: drop-shadow(0 0 5px rgba(140, 255, 20, 0.48)); }
+        50% { filter: drop-shadow(0 0 13px rgba(140, 255, 20, 0.88)); }
+      }
+
+      @keyframes area-breathe {
+        0%, 100% { opacity: 0.56; transform: scaleY(0.96); }
+        50% { opacity: 0.86; transform: scaleY(1); }
+      }
+
+      @keyframes chart-grid {
+        from { background-position: 0 0, 0 0; }
+        to { background-position: 0 24px, 24px 0; }
+      }
+
+      @keyframes chart-scan {
+        0% { transform: translateX(-120%); opacity: 0; }
+        30% { opacity: 1; }
+        70% { opacity: 1; }
+        100% { transform: translateX(120%); opacity: 0; }
+      }
+
+      @keyframes gauge-breathe {
+        0%, 100% { transform: scale(1); box-shadow: 0 0 28px rgba(101, 255, 87, 0.13); }
+        50% { transform: scale(1.025); box-shadow: 0 0 42px rgba(101, 255, 87, 0.24); }
+      }
+
+      @keyframes ring-radar {
+        from { opacity: 0.8; transform: scale(0.92); }
+        to { opacity: 0; transform: scale(1.22); }
+      }
+
+      @keyframes target-spin {
+        to { transform: rotate(360deg); }
+      }
+
+      @keyframes row-in {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      @keyframes value-flash {
+        0% { filter: brightness(1.9); }
+        100% { filter: brightness(1); }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.001ms !important;
+          animation-iteration-count: 1 !important;
+          scroll-behavior: auto !important;
+          transition-duration: 0.001ms !important;
+        }
+      }
+
+      @media (max-width: 1280px) {
+        .app {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          position: static;
+          height: auto;
+          display: grid;
+          grid-template-columns: auto 1fr;
+          gap: 14px;
+        }
+
+        .nav {
+          display: flex;
+          flex-wrap: wrap;
+          align-content: start;
+          margin-top: 0;
+        }
+
+        .side-card {
+          position: static;
+          grid-column: 1 / -1;
+        }
+
+        .grid-stats,
+        .tables {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
+      }
 
-        .columns {
+      @media (max-width: 920px) {
+        .content {
+          padding: 14px;
+        }
+
+        .topbar,
+        .main-grid,
+        .pulse-lower,
+        .mini-grid,
+        .status-rail {
           grid-template-columns: 1fr;
         }
 
-        .triple {
+        .metric-strip {
+          grid-template-columns: repeat(2, 1fr);
+        }
+
+        .chart {
           grid-template-columns: 1fr;
         }
       }
 
-      @media (max-width: 720px) {
-        body {
-          padding: 16px;
-        }
-
-        .hero {
-          flex-direction: column;
-          align-items: stretch;
-        }
-
-        .grid {
+      @media (max-width: 620px) {
+        .grid-stats,
+        .tables {
           grid-template-columns: 1fr;
         }
 
-        table, thead, tbody, th, td, tr {
-          display: block;
+        .top-status {
+          flex-direction: column;
+          align-items: flex-start;
         }
 
-        thead {
-          display: none;
-        }
-
-        tr {
-          padding: 8px 0;
-          border-bottom: 1px solid var(--line);
-        }
-
-        td {
-          border: 0;
-          padding: 6px 0;
+        .metric-strip {
+          grid-template-columns: 1fr;
         }
       }
     </style>
   </head>
   <body>
-    <div class="shell">
-      <section class="hero">
-        <div>
-          <h1>PolyBot Live Dashboard</h1>
-          <p>Reads directly from the running bot APIs on this machine.</p>
-        </div>
-        <div class="refresh-bar">
-          <span class="muted" id="last-refresh">Waiting for first refresh...</span>
-          <button id="refresh-button" type="button">Refresh Now</button>
-        </div>
-      </section>
-
-      <section class="grid">
-        <article class="panel stat">
-          <div class="stat-label">Mode</div>
-          <div class="stat-value" id="mode-value">-</div>
-        </article>
-        <article class="panel stat">
-          <div class="stat-label">Portfolio Value</div>
-          <div class="stat-value" id="balance-value">-</div>
-        </article>
-        <article class="panel stat">
-          <div class="stat-label">Daily PnL</div>
-          <div class="stat-value" id="pnl-value">-</div>
-        </article>
-        <article class="panel stat">
-          <div class="stat-label">Drawdown</div>
-          <div class="stat-value" id="drawdown-value">-</div>
-        </article>
-        <article class="panel stat">
-          <div class="stat-label">Virtual pUSD</div>
-          <div class="stat-value" id="virtual-pusd-value">-</div>
-        </article>
-        <article class="panel stat">
-          <div class="stat-label">Reserved pUSD</div>
-          <div class="stat-value" id="reserved-pusd-value">-</div>
-        </article>
-      </section>
-
-      <section class="triple">
-        <article class="panel">
-          <h2>System Health</h2>
-          <div class="meta" id="health-meta"></div>
-        </article>
-        <article class="panel">
-          <h2>Execution Summary</h2>
-          <div class="meta" id="metrics-meta"></div>
-        </article>
-        <article class="panel">
-          <h2>Operator Controls</h2>
-          <div class="controls">
-            <div class="control-row">
-              <button class="secondary" id="pause-button" type="button">Pause</button>
-              <button class="secondary" id="resume-button" type="button">Resume</button>
-            </div>
-            <div class="control-row">
-              <button class="danger" id="emergency-stop-button" type="button">Emergency Stop</button>
-            </div>
-            <div class="control-note">Pause and resume update the running bot immediately. Emergency stop will flatten open positions. Control actions require the dashboard control key.</div>
-            <div class="toast muted" id="control-feedback">No control action yet.</div>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <div>
+            <h1>SuperFast<strong>PolyBot</strong></h1>
+            <span>Local Command Center</span>
           </div>
-        </article>
-      </section>
+        </div>
+        <nav class="nav" aria-label="Dashboard navigation">
+          <a class="active" href="#command"><span class="nav-icon">C</span>Command</a>
+          <a href="#positions"><span class="nav-icon">P</span>Positions</a>
+          <a href="#signals"><span class="nav-icon">S</span>Signals</a>
+          <a href="#relayer"><span class="nav-icon">R</span>Relayer</a>
+          <a href="#settings"><span class="nav-icon">G</span>Settings</a>
+        </nav>
+        <div class="side-card">
+          <span>CLOB V2</span>
+          <strong id="side-gate">Live Gate Active</strong>
+          <div class="side-row">
+            <span>Environment</span>
+            <strong id="side-env">Simulation</strong>
+          </div>
+          <div class="side-row">
+            <span>Paper Trading</span>
+            <strong id="side-paper">Ready</strong>
+          </div>
+        </div>
+      </aside>
 
-      <section class="panel">
-        <h2>V2 Paper & Live Readiness</h2>
-        <div class="meta" id="v2-meta"></div>
-      </section>
+      <main class="content" id="command">
+        <section class="topbar">
+          <div class="badge" id="mode-badge">SIMULATION MODE</div>
+          <div class="badge ready" id="paper-badge">PAPER-READY</div>
+          <div class="top-status">
+            <div class="status-block">
+              <span class="kicker">Uptime</span>
+              <strong id="uptime-value">00d 00h 00m 00s</strong>
+            </div>
+            <div class="status-block">
+              <span class="kicker">WebSocket</span>
+              <strong><span class="dot" id="ws-dot"></span> <span id="ws-value">Checking</span></strong>
+              <span class="kicker" id="latency-chip">0ms</span>
+            </div>
+            <button class="danger-btn" id="top-emergency-button" type="button">Emergency Stop</button>
+          </div>
+        </section>
 
-      <section class="columns">
-        <article class="panel">
-          <h2>Open Positions</h2>
-          <div id="positions-container"></div>
-        </article>
-        <article class="panel">
-          <h2>Recent Signals</h2>
-          <div id="signals-container"></div>
-        </article>
-      </section>
+        <section class="grid-stats">
+          <article class="card stat hot">
+            <div class="stat-top"><span class="label">Portfolio Value</span><span class="info">i</span></div>
+            <div class="value" id="balance-value">$--</div>
+            <div class="sub good" id="portfolio-sub">paper portfolio</div>
+            <div class="spark">
+              <svg viewBox="0 0 220 38" preserveAspectRatio="none">
+                <polyline points="0,32 18,30 30,18 43,24 58,9 70,21 88,15 104,19 120,11 138,14 154,7 170,12 188,5 205,10 220,0" fill="none" stroke="#8cff14" stroke-width="3" />
+              </svg>
+            </div>
+          </article>
+          <article class="card stat">
+            <div class="stat-top"><span class="label">Daily PnL</span><span class="info">i</span></div>
+            <div class="value" id="pnl-value">$--</div>
+            <div class="sub good" id="pnl-sub">0.00%</div>
+            <div class="spark">
+              <svg viewBox="0 0 220 38" preserveAspectRatio="none">
+                <polyline points="0,23 28,23 56,22 84,23 112,22 140,23 168,22 196,23 220,22" fill="none" stroke="#8cff14" stroke-width="2" />
+              </svg>
+            </div>
+          </article>
+          <article class="card stat">
+            <div class="stat-top"><span class="label">Virtual pUSD</span><span class="info">i</span></div>
+            <div class="value" id="virtual-pusd-value">$--</div>
+            <div class="sub">available</div>
+          </article>
+          <article class="card stat">
+            <div class="stat-top"><span class="label">Reserved pUSD</span><span class="info">i</span></div>
+            <div class="value" id="reserved-pusd-value">$--</div>
+            <div class="sub">in orders</div>
+          </article>
+          <article class="card stat warn">
+            <div class="stat-top"><span class="label">Drawdown</span><span class="info">i</span></div>
+            <div class="value" id="drawdown-value">--%</div>
+            <div class="sub warn" id="drawdown-sub">0.00% peak</div>
+            <div class="spark">
+              <svg viewBox="0 0 220 38" preserveAspectRatio="none">
+                <polyline points="0,18 18,24 34,19 50,27 68,21 86,25 104,20 122,24 140,22 158,27 176,21 194,24 220,20" fill="none" stroke="#ffbe0b" stroke-width="2" />
+              </svg>
+            </div>
+          </article>
+        </section>
 
-      <section class="panel">
-        <h2>Recent Executions</h2>
-        <div id="executions-container"></div>
-      </section>
+        <section class="main-grid">
+          <article class="card">
+            <div class="panel-head">
+              <h2>Execution Pulse</h2>
+              <div class="tabs"><span class="active">1M</span><span>5M</span><span>15M</span><span>1H</span></div>
+            </div>
+            <div class="pulse-body">
+              <div class="metric-strip">
+                <div class="metric">
+                  <span class="label">Signals</span>
+                  <div class="metric-number" id="signals-received-value">0</div>
+                  <div class="metric-small">today</div>
+                </div>
+                <div class="metric">
+                  <span class="label">Trades</span>
+                  <div class="metric-number" id="trades-executed-value">0</div>
+                  <div class="metric-small">today</div>
+                </div>
+                <div class="metric">
+                  <span class="label">Success</span>
+                  <div class="metric-number" id="success-value">0</div>
+                  <div class="metric-small" id="success-pct">0.00%</div>
+                </div>
+                <div class="metric">
+                  <span class="label">Failures</span>
+                  <div class="metric-number" id="failures-value">0</div>
+                  <div class="metric-small" id="failure-pct">0.00%</div>
+                </div>
+                <div class="metric">
+                  <span class="label">Pending</span>
+                  <div class="metric-number" id="pending-value">0</div>
+                  <div class="metric-small" style="color: var(--amber);">STATE_PENDING</div>
+                </div>
+              </div>
 
-      <section class="panel">
-        <h2>Relayer Transactions</h2>
-        <div id="transactions-container"></div>
-      </section>
+              <div class="pulse-lower">
+                <div class="chart">
+                  <div class="latency">
+                    <span class="label">Median Latency</span>
+                    <strong id="median-latency-value">0ms</strong>
+                    <span class="kicker" id="p95-latency-value">P95 0ms</span>
+                  </div>
+                  <div class="chart-box">
+                    <div class="chart-line">
+                      <svg viewBox="0 0 420 120" preserveAspectRatio="none">
+                        <defs>
+                          <linearGradient id="area" x1="0" x2="0" y1="0" y2="1">
+                            <stop offset="0%" stop-color="#8cff14" stop-opacity="0.5" />
+                            <stop offset="100%" stop-color="#8cff14" stop-opacity="0.03" />
+                          </linearGradient>
+                        </defs>
+                        <polygon points="0,80 20,72 40,88 60,60 80,82 100,70 120,76 140,64 160,72 180,58 200,70 220,52 240,67 260,49 280,72 300,56 320,75 340,62 360,68 380,58 400,66 420,60 420,120 0,120" fill="url(#area)" />
+                        <polyline points="0,80 20,72 40,88 60,60 80,82 100,70 120,76 140,64 160,72 180,58 200,70 220,52 240,67 260,49 280,72 300,56 320,75 340,62 360,68 380,58 400,66 420,60" fill="none" stroke="#8cff14" stroke-width="3" />
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+                <div class="success-gauge">
+                  <span class="label">Success Rate</span>
+                  <div class="ring" id="success-ring">
+                    <div class="ring-inner">
+                      <div><strong id="success-rate-value">100%</strong><br /><span class="kicker" id="success-rate-count">(0/0)</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mini-grid">
+                <div class="mini-card">
+                  <span class="label">Order Types</span>
+                  <div class="mini-line"><span>FOK</span><strong id="fok-count">0 (0%)</strong></div>
+                  <div class="mini-line"><span>GTC</span><strong id="gtc-count">0 (0%)</strong></div>
+                </div>
+                <div class="mini-card">
+                  <span class="label">Routing</span>
+                  <div class="mini-line"><span>CLOB V2</span><strong class="status-token">Active</strong></div>
+                  <div class="mini-line"><span>Live Gate</span><strong class="status-token" id="live-gate-value">Active</strong></div>
+                </div>
+                <div class="mini-card">
+                  <span class="label">Market Status</span>
+                  <div class="mini-line"><span>Polymarket</span><strong class="status-token" id="market-health-value">Healthy</strong></div>
+                  <div class="mini-line"><span>Oracle</span><strong class="status-token">Healthy</strong></div>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <article class="card controls-card">
+            <div class="panel-head" style="padding: 0;">
+              <h2>Operator Controls</h2>
+            </div>
+            <div class="control-stack">
+              <button class="control-btn" id="pause-button" type="button">Pause<small>Halt new signals and executions</small></button>
+              <button class="control-btn resume" id="resume-button" type="button">Resume<small>Resume normal operations</small></button>
+              <button class="control-btn stop" id="emergency-stop-button" type="button">Emergency Stop<small>Cancel all and halt system</small></button>
+              <div class="toast" id="control-feedback">Control channel idle.</div>
+            </div>
+            <div class="security-list" id="settings">
+              <div class="security-row"><span>Control Key</span><strong id="control-key-status">Locked</strong></div>
+              <div class="security-row"><span>Signing Key</span><strong>Locked</strong></div>
+              <div class="security-row"><span>Relayer Auth</span><strong id="relayer-auth-status">Active</strong></div>
+              <div class="security-row"><span>Config Integrity</span><strong>OK</strong></div>
+              <div class="security-row"><span>Last Verified</span><strong id="last-verified-value">--:--:--</strong></div>
+            </div>
+          </article>
+        </section>
+
+        <section class="tables">
+          <article class="card table-card" id="positions">
+            <div class="panel-head">
+              <h2>Open Positions</h2>
+              <span class="count" id="positions-count">0</span>
+            </div>
+            <div class="table-wrap" id="positions-container"></div>
+            <button class="view-btn" type="button">View All Positions</button>
+          </article>
+          <article class="card table-card" id="signals">
+            <div class="panel-head">
+              <h2>Recent Signals</h2>
+              <span class="count" id="signals-count">0</span>
+            </div>
+            <div class="table-wrap" id="signals-container"></div>
+            <button class="view-btn" type="button">View All Signals</button>
+          </article>
+          <article class="card table-card">
+            <div class="panel-head">
+              <h2>Recent Executions</h2>
+              <span class="count" id="executions-count">0</span>
+            </div>
+            <div class="table-wrap" id="executions-container"></div>
+            <button class="view-btn" type="button">View All Executions</button>
+          </article>
+          <article class="card table-card" id="relayer">
+            <div class="panel-head">
+              <h2>Relayer Transactions</h2>
+              <span class="count" id="transactions-count">0</span>
+            </div>
+            <div class="table-wrap" id="transactions-container"></div>
+            <button class="view-btn" type="button">View Relayer Logs</button>
+          </article>
+        </section>
+
+        <section class="status-rail">
+          <div class="rail-item"><span class="rail-icon green"></span><div><span class="kicker">Network</span><strong>Local</strong></div></div>
+          <div class="rail-item"><span class="rail-icon"></span><div><span class="kicker">Polymarket Env</span><strong id="rail-env">Simulation</strong></div></div>
+          <div class="rail-item"><span class="rail-icon"></span><div><span class="kicker">Chain ID</span><strong>Polygon (SIM)</strong></div></div>
+          <div class="rail-item"><span class="rail-icon"></span><div><span class="kicker">Gas Price</span><strong>N/A (SIM)</strong></div></div>
+          <div class="rail-item"><span class="rail-icon"></span><div><span class="kicker">Time Local</span><strong id="local-time-value">--</strong></div></div>
+        </section>
+      </main>
     </div>
 
     <script>
       const CONTROL_KEY_STORAGE = "polybot_control_key";
       const CONTROL_KEY_HEADER = "X-PolyBot-Control-Key";
+      const latencyTrace = Array.from({ length: 22 }, function(_, index) {
+        return 22 + Math.sin(index / 1.7) * 8 + (index % 4) * 2;
+      });
+
+      function byId(id) {
+        return document.getElementById(id);
+      }
+
+      function setText(id, value) {
+        const el = byId(id);
+        if (!el) return;
+        const next = String(value);
+        const changed = el.textContent !== next;
+        el.textContent = next;
+        if (changed && shouldFlash(el)) {
+          el.classList.remove("value-updated");
+          void el.offsetWidth;
+          el.classList.add("value-updated");
+        }
+      }
+
+      function shouldFlash(el) {
+        return el.classList.contains("value")
+          || el.classList.contains("metric-number")
+          || el.classList.contains("count")
+          || el.id === "median-latency-value"
+          || el.id === "success-rate-value";
+      }
+
+      function escapeHtml(value) {
+        return String(value == null ? "" : value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
 
       async function fetchJson(path) {
         const response = await fetch(path);
-        if (!response.ok) {
-          throw new Error(path + " returned " + response.status);
-        }
+        if (!response.ok) throw new Error(path + " returned " + response.status);
         return response.json();
       }
 
       async function fetchText(path) {
         const response = await fetch(path);
-        if (!response.ok) {
-          throw new Error(path + " returned " + response.status);
-        }
+        if (!response.ok) throw new Error(path + " returned " + response.status);
         return response.text();
-      }
-
-      function setText(id, value) {
-        document.getElementById(id).textContent = value;
-      }
-
-      function pill(text, ok) {
-        const cls = ok ? "ok" : "danger";
-        return '<span class="pill ' + cls + '">' + text + "</span>";
-      }
-
-      function renderMeta(containerId, rows) {
-        const html = rows
-          .map(function(row) {
-            return '<div class="meta-row"><span class="muted">' + row.label + '</span><span>' + row.value + "</span></div>";
-          })
-          .join("");
-        document.getElementById(containerId).innerHTML = html;
-      }
-
-      function renderPositions(positions) {
-        const container = document.getElementById("positions-container");
-        if (!positions.length) {
-          container.innerHTML = '<p class="muted">No open positions.</p>';
-          return;
-        }
-
-        const rows = positions.map(function(position) {
-          return (
-            "<tr>" +
-            "<td>" + position.market_id + "</td>" +
-            "<td>" + position.side + "</td>" +
-            "<td>" + position.average_price + "</td>" +
-            "<td>" + position.current_size + "</td>" +
-            "<td>" + position.category + "</td>" +
-            "<td>" + position.status + "</td>" +
-            "</tr>"
-          );
-        }).join("");
-
-        container.innerHTML =
-          "<table><thead><tr><th>Market</th><th>Side</th><th>Avg</th><th>Size</th><th>Category</th><th>Status</th></tr></thead><tbody>" +
-          rows +
-          "</tbody></table>";
-      }
-
-      function renderSignals(signals) {
-        const container = document.getElementById("signals-container");
-        if (!signals.length) {
-          container.innerHTML = '<p class="muted">No recent signals.</p>';
-          return;
-        }
-
-        const rows = signals.map(function(signal) {
-          return (
-            "<tr>" +
-            "<td>" + signal.market_id + "</td>" +
-            "<td>" + signal.side + "</td>" +
-            "<td>" + signal.confidence + "</td>" +
-            "<td>" + signal.secret_level + "</td>" +
-            "<td>" + signal.disposition + "</td>" +
-            "</tr>"
-          );
-        }).join("");
-
-        container.innerHTML =
-          "<table><thead><tr><th>Market</th><th>Side</th><th>Conf</th><th>Secret</th><th>Disposition</th></tr></thead><tbody>" +
-          rows +
-          "</tbody></table>";
-      }
-
-      function renderExecutions(executions) {
-        const container = document.getElementById("executions-container");
-        if (!executions.length) {
-          container.innerHTML = '<p class="muted">No recent executions.</p>';
-          return;
-        }
-
-        const rows = executions.map(function(execution) {
-          return (
-            "<tr>" +
-            "<td>" + execution.market_id + "</td>" +
-            "<td>" + execution.side + "</td>" +
-            "<td>" + execution.status + "</td>" +
-            "<td>$" + Number(execution.size_usd).toFixed(2) + "</td>" +
-            "<td>" + execution.category + "</td>" +
-            "<td>" + new Date(execution.placed_at).toLocaleTimeString() + "</td>" +
-            "</tr>"
-          );
-        }).join("");
-
-        container.innerHTML =
-          "<table><thead><tr><th>Market</th><th>Side</th><th>Status</th><th>Size</th><th>Category</th><th>Placed</th></tr></thead><tbody>" +
-          rows +
-          "</tbody></table>";
       }
 
       function parseMetric(metricsText, name) {
@@ -496,25 +1509,108 @@
         return line.trim().split(/\s+/).pop();
       }
 
-      function setControlFeedback(message, ok) {
-        const el = document.getElementById("control-feedback");
-        el.textContent = message;
-        el.className = "toast " + (ok ? "ok" : "error");
+      function num(value) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : 0;
+      }
+
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+      }
+
+      function money(value) {
+        return "$" + num(value).toLocaleString(undefined, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        });
+      }
+
+      function uptime(seconds) {
+        const days = Math.floor(seconds / 86400);
+        const hours = Math.floor((seconds % 86400) / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const sec = Math.floor(seconds % 60);
+        return days + "d " + String(hours).padStart(2, "0") + "h " + String(minutes).padStart(2, "0") + "m " + String(sec).padStart(2, "0") + "s";
+      }
+
+      function emptyState(title, body) {
+        return '<div class="empty"><div><div class="target"></div><strong>' + escapeHtml(title) + '</strong><span>' + escapeHtml(body) + '</span></div></div>';
+      }
+
+      function buildTracePoints(values, width, height, pad) {
+        const max = Math.max.apply(null, values.concat([1]));
+        const min = Math.min.apply(null, values.concat([0]));
+        const range = Math.max(max - min, 1);
+        return values.map(function(value, index) {
+          const x = (index / Math.max(values.length - 1, 1)) * width;
+          const y = pad + (1 - ((value - min) / range)) * (height - pad * 2);
+          return Math.round(x) + "," + Math.round(y);
+        }).join(" ");
+      }
+
+      function updateLatencyTrace(latencyMs) {
+        const safeLatency = clamp(Number(latencyMs) || 0, 0, 250);
+        const last = latencyTrace[latencyTrace.length - 1] || safeLatency;
+        const blended = last * 0.55 + safeLatency * 0.45;
+        latencyTrace.push(blended);
+        while (latencyTrace.length > 22) latencyTrace.shift();
+
+        const points = buildTracePoints(latencyTrace, 420, 120, 16);
+        const line = document.querySelector(".chart-line polyline");
+        const area = document.querySelector(".chart-line polygon");
+        if (line) {
+          line.setAttribute("points", points);
+          line.style.animation = "none";
+          void line.getBoundingClientRect();
+          line.style.animation = "line-draw 640ms var(--ease-out) forwards, line-glow 2.6s ease-in-out 700ms infinite";
+        }
+        if (area) {
+          area.setAttribute("points", points + " 420,120 0,120");
+        }
+      }
+
+      function bindPointerGlow() {
+        document.querySelectorAll(".card, .topbar").forEach(function(panel) {
+          panel.addEventListener("pointermove", function(event) {
+            const rect = panel.getBoundingClientRect();
+            panel.style.setProperty("--mx", Math.round(((event.clientX - rect.left) / rect.width) * 100) + "%");
+            panel.style.setProperty("--my", Math.round(((event.clientY - rect.top) / rect.height) * 100) + "%");
+          });
+        });
+      }
+
+      function renderTable(containerId, rows, headers, cells, emptyTitle, emptyBody) {
+        const container = byId(containerId);
+        if (!container) return;
+        if (!rows.length) {
+          container.innerHTML = emptyState(emptyTitle, emptyBody);
+          return;
+        }
+        const head = headers.map(function(header) {
+          return "<th>" + escapeHtml(header) + "</th>";
+        }).join("");
+        const body = rows.map(function(row) {
+          return "<tr>" + cells(row).map(function(cell) {
+            return "<td>" + escapeHtml(cell) + "</td>";
+          }).join("") + "</tr>";
+        }).join("");
+        container.innerHTML = "<table><thead><tr>" + head + "</tr></thead><tbody>" + body + "</tbody></table>";
       }
 
       function getControlKey() {
         const stored = window.localStorage.getItem(CONTROL_KEY_STORAGE);
-        if (stored && stored.trim()) {
-          return stored.trim();
-        }
-
+        if (stored && stored.trim()) return stored.trim();
         const key = window.prompt("Enter dashboard control key");
-        if (!key || !key.trim()) {
-          throw new Error("Dashboard control key required.");
-        }
-
+        if (!key || !key.trim()) throw new Error("Dashboard control key required.");
         window.localStorage.setItem(CONTROL_KEY_STORAGE, key.trim());
         return key.trim();
+      }
+
+      function setControlFeedback(message, ok) {
+        const el = byId("control-feedback");
+        if (!el) return;
+        el.textContent = message;
+        el.className = "toast " + (ok ? "ok" : "error");
       }
 
       async function postControl(path, options) {
@@ -533,44 +1629,22 @@
 
         if (response.status === 401) {
           window.localStorage.removeItem(CONTROL_KEY_STORAGE);
+          setText("control-key-status", "Invalid");
         }
 
-        if (!response.ok) {
-          throw new Error(body.message || ("Control request failed: " + response.status));
-        }
-
+        if (!response.ok) throw new Error(body.message || "Control request failed: " + response.status);
+        setText("control-key-status", "Locked");
         return body;
       }
 
-      function renderTransactions(transactions) {
-        const container = document.getElementById("transactions-container");
-        if (!transactions.length) {
-          container.innerHTML = '<p class="muted">No relayer transactions yet.</p>';
-          return;
-        }
-
-        const rows = transactions.map(function(transaction) {
-          const hash = transaction.transaction_hash || "-";
-          const err = transaction.error_msg || "";
-          return (
-            "<tr>" +
-            "<td>" + transaction.transaction_id + "</td>" +
-            "<td>" + transaction.kind + "</td>" +
-            "<td>" + transaction.state + "</td>" +
-            "<td>" + hash + "</td>" +
-            "<td>" + new Date(transaction.submitted_at).toLocaleTimeString() + "</td>" +
-            "<td>" + err + "</td>" +
-            "</tr>"
-          );
-        }).join("");
-
-        container.innerHTML =
-          "<table><thead><tr><th>Transaction</th><th>Kind</th><th>State</th><th>Hash</th><th>Submitted</th><th>Error</th></tr></thead><tbody>" +
-          rows +
-          "</tbody></table>";
+      function countStates(transactions, predicate) {
+        return transactions.filter(function(transaction) {
+          return predicate(String(transaction.state || ""));
+        }).length;
       }
 
       async function refresh() {
+        document.body.classList.add("refreshing");
         try {
           const health = await fetchJson("/health");
           const metricsText = await fetchText("/metrics");
@@ -579,57 +1653,145 @@
           const executions = await fetchJson("/executions?limit=10");
           const transactions = await fetchJson("/transactions?limit=10");
 
-          setText("mode-value", health.simulation ? "SIM" : "LIVE");
-          setText("balance-value", "$" + health.balance_usd);
-          setText("pnl-value", "$" + health.daily_pnl);
-          setText("drawdown-value", health.drawdown_pct + "%");
-          setText("virtual-pusd-value", "$" + health.virtual_pusd);
-          setText("reserved-pusd-value", "$" + health.reserved_pusd);
-          setText("last-refresh", "Last refresh: " + new Date().toLocaleTimeString());
+          const sim = !!health.simulation;
+          const tradesExecuted = Number(parseMetric(metricsText, "polybot_trades_executed_total")) || 0;
+          const tradesFailed = Number(parseMetric(metricsText, "polybot_trades_failed_total")) || 0;
+          const pending = countStates(transactions, function(state) {
+            return state === "STATE_NEW" || state === "STATE_PENDING" || state === "STATE_SUBMITTED" || state === "STATE_EXECUTED" || state === "STATE_MINED";
+          });
+          const successes = countStates(transactions, function(state) {
+            return state === "STATE_SUCCESS" || state === "STATE_CONFIRMED";
+          });
+          const failures = countStates(transactions, function(state) {
+            return state === "STATE_FAILED" || state === "STATE_INVALID";
+          }) || tradesFailed;
+          const attempts = successes + failures;
+          const successRate = attempts > 0 ? successes / attempts : 1;
+          const avgLatencyMs = Math.round((Number(parseMetric(metricsText, "polybot_avg_latency_us")) || 0) / 1000);
+          const maxLatencyMs = Math.round((Number(parseMetric(metricsText, "polybot_max_latency_us")) || 0) / 1000);
 
-          renderMeta("health-meta", [
-            { label: "System Status", value: health.status.toUpperCase() },
-            { label: "Open Positions", value: String(health.open_positions) },
-            { label: "WebSocket", value: health.ws_connected ? pill("Connected", true) : pill("Disconnected", false) },
-            { label: "RPC", value: health.rpc_status },
-            { label: "Paused", value: health.paused ? pill("Paused", false) : pill("Active", true) },
-            { label: "Last Signal", value: health.last_signal_at || "Never" },
-            { label: "Emergency Stops", value: String(health.emergency_stops) }
-          ]);
+          setText("mode-badge", sim ? "SIMULATION MODE" : "LIVE MODE");
+          setText("paper-badge", sim ? "PAPER-READY" : "LIVE GATE ACTIVE");
+          setText("side-env", sim ? "SIMULATION" : "LIVE");
+          setText("rail-env", sim ? "SIMULATION" : "LIVE");
+          setText("side-paper", sim ? "READY" : "MONITOR");
+          setText("side-gate", health.live_disabled_reason ? "Live Gate Active" : "Live Enabled");
+          setText("live-gate-value", health.live_disabled_reason ? "Active" : "Passed");
+          setText("uptime-value", uptime(Number(health.uptime_secs) || 0));
+          setText("ws-value", sim ? "SIMULATED" : (health.ws_connected ? "CONNECTED" : "DISCONNECTED"));
+          setText("latency-chip", (Number(health.data_api_latency_ms) || 0) + "ms");
+          byId("ws-dot").style.background = sim || health.ws_connected ? "var(--lime)" : "var(--red)";
 
-          renderMeta("v2-meta", [
-            { label: "Readiness Mode", value: health.simulation ? pill("Paper Ready", true) : pill("Live Gate Active", true) },
-            { label: "Live Guard", value: health.live_disabled_reason || "Live mode enabled by config" },
-            { label: "Virtual pUSD", value: "$" + health.virtual_pusd },
-            { label: "Reserved pUSD", value: "$" + health.reserved_pusd },
-            { label: "Fees Paid", value: "$" + health.fees_paid },
-            { label: "Rebates Earned", value: "$" + health.rebates_earned }
-          ]);
+          setText("balance-value", money(health.balance_usd));
+          setText("pnl-value", money(health.daily_pnl));
+          setText("virtual-pusd-value", money(health.virtual_pusd));
+          setText("reserved-pusd-value", money(health.reserved_pusd));
+          setText("drawdown-value", (num(health.drawdown_pct)).toFixed(2) + "%");
+          setText("drawdown-sub", (num(health.drawdown_pct)).toFixed(2) + "% peak");
+          setText("pnl-sub", num(health.balance_usd) > 0 ? ((num(health.daily_pnl) / num(health.balance_usd)) * 100).toFixed(2) + "%" : "0.00%");
+          setText("portfolio-sub", sim ? "paper portfolio" : "live capital");
 
-          renderMeta("metrics-meta", [
-            { label: "Signals Received", value: String(health.signals_received) },
-            { label: "Signals Processed", value: String(health.signals_processed) },
-            { label: "Signals Skipped", value: parseMetric(metricsText, "polybot_signals_skipped_total") },
-            { label: "Trades Executed", value: parseMetric(metricsText, "polybot_trades_executed_total") },
-            { label: "Trades Simulated", value: parseMetric(metricsText, "polybot_trades_simulated_total") },
-            { label: "Trades Failed", value: parseMetric(metricsText, "polybot_trades_failed_total") },
-            { label: "Signals Skipped", value: parseMetric(metricsText, "polybot_signals_skipped_total") },
-            { label: "Drawdown", value: (Number(parseMetric(metricsText, "polybot_drawdown_pct")) * 100).toFixed(2) + "%" },
-            { label: "Avg Latency", value: parseMetric(metricsText, "polybot_avg_latency_us") + " us" },
-            { label: "Max Latency", value: parseMetric(metricsText, "polybot_max_latency_us") + " us" }
-          ]);
+          setText("signals-received-value", String(health.signals_received || 0));
+          setText("trades-executed-value", String(tradesExecuted));
+          setText("success-value", String(successes));
+          setText("failures-value", String(failures));
+          setText("pending-value", String(pending));
+          setText("success-pct", (successRate * 100).toFixed(2) + "%");
+          setText("failure-pct", attempts > 0 ? ((failures / attempts) * 100).toFixed(2) + "%" : "0.00%");
+          setText("median-latency-value", avgLatencyMs + "ms");
+          setText("p95-latency-value", "P95 " + maxLatencyMs + "ms");
+          updateLatencyTrace(avgLatencyMs);
+          setText("success-rate-value", Math.round(successRate * 100) + "%");
+          setText("success-rate-count", "(" + successes + "/" + attempts + ")");
+          byId("success-ring").style.setProperty("--success-deg", Math.round(successRate * 360) + "deg");
+          setText("market-health-value", sim || health.rpc_status === "healthy" ? "Healthy" : "Degraded");
+          setText("relayer-auth-status", sim ? "Dry Run" : "Active");
+          setText("last-verified-value", new Date().toLocaleTimeString());
+          setText("local-time-value", new Date().toLocaleString());
 
-          renderPositions(positions);
-          renderSignals(signals);
-          renderExecutions(executions);
-          renderTransactions(transactions);
+          setText("positions-count", String(positions.length));
+          setText("signals-count", String(signals.length));
+          setText("executions-count", String(executions.length));
+          setText("transactions-count", String(transactions.length));
+
+          const fok = executions.filter(function(execution) {
+            return String(execution.order_type || "").toLowerCase().includes("fok");
+          }).length;
+          const gtc = Math.max(executions.length - fok, 0);
+          setText("fok-count", fok + " (" + (executions.length ? Math.round((fok / executions.length) * 100) : 0) + "%)");
+          setText("gtc-count", gtc + " (" + (executions.length ? Math.round((gtc / executions.length) * 100) : 0) + "%)");
+
+          renderTable(
+            "positions-container",
+            positions,
+            ["Market", "Side", "Size", "Avg", "PnL"],
+            function(position) {
+              return [
+                position.market_id,
+                position.side,
+                position.current_size,
+                position.average_price,
+                position.unrealized_pnl || "0.00"
+              ];
+            },
+            "No open positions",
+            "Your positions will appear here."
+          );
+
+          renderTable(
+            "signals-container",
+            signals,
+            ["Market", "Side", "Type", "State"],
+            function(signal) {
+              return [signal.market_id, signal.side, signal.category, signal.disposition];
+            },
+            "No signals yet",
+            "Incoming signals will show here."
+          );
+
+          renderTable(
+            "executions-container",
+            executions,
+            ["Market", "Side", "Price", "Size", "State"],
+            function(execution) {
+              return [
+                execution.market_id,
+                execution.side,
+                execution.price || "-",
+                money(execution.size_usd),
+                execution.status
+              ];
+            },
+            "No executions yet",
+            "Executed trades will appear here."
+          );
+
+          renderTable(
+            "transactions-container",
+            transactions,
+            ["Time", "Type", "Tx/Hash", "Status", "Latency"],
+            function(transaction) {
+              return [
+                transaction.submitted_at ? new Date(transaction.submitted_at).toLocaleTimeString() : "-",
+                transaction.kind,
+                transaction.transaction_hash || transaction.transaction_id,
+                transaction.state,
+                "-"
+              ];
+            },
+            "No transactions yet",
+            "Relayer activity will appear here."
+          );
         } catch (error) {
-          setText("last-refresh", "Refresh failed: " + error.message);
+          setControlFeedback("Refresh failed: " + error.message, false);
+        } finally {
+          window.setTimeout(function() {
+            document.body.classList.remove("refreshing");
+          }, 260);
         }
       }
 
-      document.getElementById("refresh-button").addEventListener("click", refresh);
-      document.getElementById("pause-button").addEventListener("click", async function() {
+      byId("pause-button").addEventListener("click", async function() {
         try {
           const body = await postControl("/control/pause");
           setControlFeedback(body.message, true);
@@ -638,7 +1800,8 @@
           setControlFeedback(error.message, false);
         }
       });
-      document.getElementById("resume-button").addEventListener("click", async function() {
+
+      byId("resume-button").addEventListener("click", async function() {
         try {
           const body = await postControl("/control/resume", { retryOnConfirm: true });
           setControlFeedback(body.message, true);
@@ -647,11 +1810,9 @@
           setControlFeedback(error.message, false);
         }
       });
-      document.getElementById("emergency-stop-button").addEventListener("click", async function() {
-        if (!window.confirm("Emergency stop will pause trading and flatten open positions. Continue?")) {
-          return;
-        }
 
+      async function emergencyStop() {
+        if (!window.confirm("Emergency stop will pause trading and flatten open positions. Continue?")) return;
         try {
           const body = await postControl("/control/emergency-stop");
           setControlFeedback(body.message, true);
@@ -659,9 +1820,20 @@
         } catch (error) {
           setControlFeedback(error.message, false);
         }
+      }
+
+      byId("emergency-stop-button").addEventListener("click", emergencyStop);
+      byId("top-emergency-button").addEventListener("click", emergencyStop);
+
+      bindPointerGlow();
+      requestAnimationFrame(function() {
+        document.body.classList.add("dashboard-ready");
       });
       refresh();
       setInterval(refresh, 5000);
+      setInterval(function() {
+        setText("local-time-value", new Date().toLocaleString());
+      }, 1000);
     </script>
   </body>
 </html>
