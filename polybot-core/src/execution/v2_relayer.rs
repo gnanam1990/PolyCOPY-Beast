@@ -45,8 +45,12 @@ pub fn map_transaction_state(raw: &str) -> Result<TransactionState, PolybotError
         "STATE_NEW" => Ok(TransactionState::New),
         "STATE_PENDING" => Ok(TransactionState::Pending),
         "STATE_SUBMITTED" => Ok(TransactionState::Submitted),
+        "STATE_EXECUTED" => Ok(TransactionState::Executed),
+        "STATE_MINED" => Ok(TransactionState::Mined),
         "STATE_SUCCESS" => Ok(TransactionState::Success),
+        "STATE_CONFIRMED" => Ok(TransactionState::Confirmed),
         "STATE_FAILED" => Ok(TransactionState::Failed),
+        "STATE_INVALID" => Ok(TransactionState::Invalid),
         other => Err(PolybotError::Execution(format!(
             "unknown relayer transaction state: {}",
             other
@@ -101,6 +105,12 @@ mod tests {
             .unwrap()
             .is_terminal());
         assert!(map_transaction_state("STATE_SUCCESS")
+            .unwrap()
+            .is_terminal());
+        assert!(map_transaction_state("STATE_CONFIRMED")
+            .unwrap()
+            .is_terminal());
+        assert!(map_transaction_state("STATE_INVALID")
             .unwrap()
             .is_terminal());
         assert!(map_transaction_state("STATE_FAILED").unwrap().is_terminal());

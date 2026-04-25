@@ -508,15 +508,29 @@ pub enum TransactionState {
     Pending,
     #[serde(rename = "STATE_SUBMITTED")]
     Submitted,
+    #[serde(rename = "STATE_EXECUTED")]
+    Executed,
+    #[serde(rename = "STATE_MINED")]
+    Mined,
     #[serde(rename = "STATE_SUCCESS")]
     Success,
+    #[serde(rename = "STATE_CONFIRMED")]
+    Confirmed,
     #[serde(rename = "STATE_FAILED")]
     Failed,
+    #[serde(rename = "STATE_INVALID")]
+    Invalid,
 }
 
 impl TransactionState {
     pub fn is_terminal(&self) -> bool {
-        matches!(self, TransactionState::Success | TransactionState::Failed)
+        matches!(
+            self,
+            TransactionState::Success
+                | TransactionState::Confirmed
+                | TransactionState::Failed
+                | TransactionState::Invalid
+        )
     }
 
     pub fn as_sqlite_str(&self) -> &'static str {
@@ -524,8 +538,12 @@ impl TransactionState {
             TransactionState::New => "STATE_NEW",
             TransactionState::Pending => "STATE_PENDING",
             TransactionState::Submitted => "STATE_SUBMITTED",
+            TransactionState::Executed => "STATE_EXECUTED",
+            TransactionState::Mined => "STATE_MINED",
             TransactionState::Success => "STATE_SUCCESS",
+            TransactionState::Confirmed => "STATE_CONFIRMED",
             TransactionState::Failed => "STATE_FAILED",
+            TransactionState::Invalid => "STATE_INVALID",
         }
     }
 }
@@ -845,8 +863,12 @@ mod tests {
             TransactionState::New,
             TransactionState::Pending,
             TransactionState::Submitted,
+            TransactionState::Executed,
+            TransactionState::Mined,
             TransactionState::Success,
+            TransactionState::Confirmed,
             TransactionState::Failed,
+            TransactionState::Invalid,
         ];
         for s in states {
             let j = serde_json::to_string(&s).unwrap();
@@ -861,8 +883,12 @@ mod tests {
             ("\"STATE_NEW\"", TransactionState::New),
             ("\"STATE_PENDING\"", TransactionState::Pending),
             ("\"STATE_SUBMITTED\"", TransactionState::Submitted),
+            ("\"STATE_EXECUTED\"", TransactionState::Executed),
+            ("\"STATE_MINED\"", TransactionState::Mined),
             ("\"STATE_SUCCESS\"", TransactionState::Success),
+            ("\"STATE_CONFIRMED\"", TransactionState::Confirmed),
             ("\"STATE_FAILED\"", TransactionState::Failed),
+            ("\"STATE_INVALID\"", TransactionState::Invalid),
         ];
         for (wire, expected) in cases {
             let parsed: TransactionState = serde_json::from_str(wire).unwrap();
@@ -875,8 +901,12 @@ mod tests {
         assert!(!TransactionState::New.is_terminal());
         assert!(!TransactionState::Pending.is_terminal());
         assert!(!TransactionState::Submitted.is_terminal());
+        assert!(!TransactionState::Executed.is_terminal());
+        assert!(!TransactionState::Mined.is_terminal());
         assert!(TransactionState::Success.is_terminal());
+        assert!(TransactionState::Confirmed.is_terminal());
         assert!(TransactionState::Failed.is_terminal());
+        assert!(TransactionState::Invalid.is_terminal());
     }
 
     #[test]

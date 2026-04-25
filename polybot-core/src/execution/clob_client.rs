@@ -466,14 +466,24 @@ fn map_terminal_relayer_state_to_trade(
     let state = crate::execution::v2_client::map_transaction_state(&response.state)?;
     trade.relayer_state = Some(state);
     trade.transaction_hash = response.transaction_hash.clone();
-    if matches!(state, polybot_common::types::TransactionState::Failed) {
-        trade.status = polybot_common::types::TradeStatus::Failed(
-            response
-                .error_msg
-                .clone()
-                .unwrap_or_else(|| "Relayer transaction failed".to_string()),
-        );
-        trade.error_msg = response.error_msg.clone();
+    match state {
+        polybot_common::types::TransactionState::Success
+        | polybot_common::types::TransactionState::Confirmed => {
+            trade.status = polybot_common::types::TradeStatus::Filled;
+            trade.filled_size = trade.size;
+            trade.filled_at = Some(chrono::Utc::now());
+        }
+        polybot_common::types::TransactionState::Failed
+        | polybot_common::types::TransactionState::Invalid => {
+            trade.status = polybot_common::types::TradeStatus::Failed(
+                response
+                    .error_msg
+                    .clone()
+                    .unwrap_or_else(|| "Relayer transaction failed".to_string()),
+            );
+            trade.error_msg = response.error_msg.clone();
+        }
+        _ => {}
     }
     Ok(trade)
 }
@@ -827,7 +837,7 @@ impl ClobClient {
         let signed_order = payload_to_relayer_json(&signed_payload);
         let relayer_client = RelayerClient::new(relayer).map_err(SubmitOrderError::from)?;
         let submit_response = relayer_client
-            .submit_order(signed_order)
+            .submit_order(signed_order, order.order_type)
             .await
             .map_err(SubmitOrderError::from)?;
         let trade = map_submit_response_to_trade(order, &submit_response)
@@ -1561,5 +1571,31 @@ mod tests {
             Some(polybot_common::types::TransactionState::Failed)
         );
         assert!(matches!(updated.status, TradeStatus::Failed(_)));
+    }
+
+    #[test]
+    fn terminal_relayer_confirmed_marks_trade_filled() {
+        let order = test_order(TradeDirection::Buy);
+        let submit = RelayerSubmitResponse {
+            transaction_id: "txn_abc123".to_string(),
+            state: "STATE_NEW".to_string(),
+        };
+        let trade = map_submit_response_to_trade(&order, &submit).unwrap();
+        let terminal = crate::execution::v2_client::RelayerTransactionResponse {
+            transaction_id: "txn_abc123".to_string(),
+            state: "STATE_CONFIRMED".to_string(),
+            transaction_hash: Some("0xdeadbeef".to_string()),
+            error_msg: None,
+        };
+
+        let updated = map_terminal_relayer_state_to_trade(trade, &terminal).unwrap();
+
+        assert_eq!(
+            updated.relayer_state,
+            Some(polybot_common::types::TransactionState::Confirmed)
+        );
+        assert_eq!(updated.status, TradeStatus::Filled);
+        assert_eq!(updated.filled_size, order.size);
+        assert_eq!(updated.transaction_hash.as_deref(), Some("0xdeadbeef"));
     }
 }
