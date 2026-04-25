@@ -1,9 +1,11 @@
+pub mod copied_lots;
 pub mod migrations;
 pub mod pnl;
 pub mod positions;
 pub mod reconciliation;
 pub mod sqlite;
 
+use chrono::{DateTime, Utc};
 use polybot_common::errors::PolybotError;
 use polybot_common::types::{PositionKey, Trade, TradeStatus};
 use rust_decimal::prelude::ToPrimitive;
@@ -78,6 +80,101 @@ fn update_daily_stats(
     store.upsert_daily_stats(&stats)
 }
 
+fn copied_lot_side_key(side: polybot_common::types::Side) -> &'static str {
+    match side {
+        polybot_common::types::Side::Yes => "YES",
+        polybot_common::types::Side::No => "NO",
+    }
+}
+
+fn copied_lot_from_row(row: sqlite::CopiedLotRow) -> Result<copied_lots::CopiedLot, PolybotError> {
+    Ok(copied_lots::CopiedLot {
+        id: row.id,
+        source_wallet: row.source_wallet,
+        market_id: row.market_id,
+        side: match row.side.as_str() {
+            "YES" | "Yes" => polybot_common::types::Side::Yes,
+            "NO" | "No" => polybot_common::types::Side::No,
+            other => {
+                return Err(PolybotError::State(format!(
+                    "unsupported copied lot side: {}",
+                    other
+                )))
+            }
+        },
+        current_size: row.current_size,
+        average_price: row.average_price,
+        opened_at: DateTime::parse_from_rfc3339(&row.opened_at)
+            .map(|value| value.with_timezone(&Utc))
+            .map_err(|error| PolybotError::State(format!("Invalid copied lot opened_at: {}", error)))?,
+        updated_at: DateTime::parse_from_rfc3339(&row.updated_at)
+            .map(|value| value.with_timezone(&Utc))
+            .map_err(|error| PolybotError::State(format!("Invalid copied lot updated_at: {}", error)))?,
+        last_signal_id: row.last_signal_id,
+        last_tx_hash: row.last_tx_hash,
+    })
+}
+
+fn copied_lot_to_row(lot: copied_lots::CopiedLot) -> sqlite::CopiedLotRow {
+    sqlite::CopiedLotRow {
+        id: lot.id,
+        source_wallet: lot.source_wallet,
+        market_id: lot.market_id,
+        side: copied_lot_side_key(lot.side).to_string(),
+        current_size: lot.current_size,
+        average_price: lot.average_price,
+        opened_at: lot.opened_at.to_rfc3339(),
+        updated_at: lot.updated_at.to_rfc3339(),
+        last_signal_id: lot.last_signal_id,
+        last_tx_hash: lot.last_tx_hash,
+    }
+}
+
+fn copied_lot_from_trade(trade: &Trade) -> copied_lots::CopiedLot {
+    let filled_at = trade.filled_at.unwrap_or_else(Utc::now);
+    copied_lots::CopiedLot {
+        id: uuid::Uuid::new_v4().to_string(),
+        source_wallet: trade.source_wallet.to_lowercase(),
+        market_id: trade.market_id.clone(),
+        side: trade.side,
+        current_size: trade.filled_size,
+        average_price: trade.price,
+        opened_at: filled_at,
+        updated_at: filled_at,
+        last_signal_id: Some(trade.signal_id.clone()),
+        last_tx_hash: None,
+    }
+}
+
+fn update_copied_lot_from_trade(
+    store: &sqlite::SqliteStore,
+    trade: &Trade,
+) -> Result<(), PolybotError> {
+    if trade.simulated
+        || !matches!(trade.status, TradeStatus::Filled | TradeStatus::PartiallyFilled)
+        || trade.filled_size <= Decimal::ZERO
+    {
+        return Ok(());
+    }
+
+    let side_key = copied_lot_side_key(trade.side);
+    let next_lot = match store.get_copied_lot(&trade.source_wallet, &trade.market_id, side_key)? {
+        Some(row) => copied_lot_from_row(row)?.apply_fill(trade.direction, trade.filled_size, trade.price)?,
+        None if matches!(trade.direction, polybot_common::types::TradeDirection::Buy) => {
+            Some(copied_lot_from_trade(trade))
+        }
+        None => None,
+    };
+
+    match next_lot {
+        Some(lot) => store.upsert_copied_lot(&copied_lot_to_row(lot)),
+        None if matches!(trade.direction, polybot_common::types::TradeDirection::Sell) => {
+            store.delete_copied_lot(&trade.source_wallet, &trade.market_id, side_key)
+        }
+        None => Ok(()),
+    }
+}
+
 pub async fn force_flatten_positions(
     metrics: Arc<Metrics>,
     position_manager: Arc<Mutex<positions::PositionManager>>,
@@ -141,6 +238,12 @@ async fn run_in_memory(
 
         let sqlite_store = sqlite_path.and_then(|path| sqlite::SqliteStore::open(std::path::Path::new(path)).ok());
 
+        if let Some(store) = sqlite_store.as_ref() {
+            if let Err(e) = update_copied_lot_from_trade(store, &trade) {
+                tracing::error!(error = %e, "Failed to update copied lot from trade fill");
+            }
+        }
+
         let (position_snapshot, current_price, open_positions, unrealized) = {
             let mut position_manager = position_manager.lock().await;
             if let Err(e) = position_manager.update_from_trade(&trade) {
@@ -158,17 +261,33 @@ async fn run_in_memory(
             )
         };
 
-        if let (Some(store), Some(pos)) = (sqlite_store.as_ref(), position_snapshot.as_ref()) {
-            let owner = match store.lookup_signal_wallet(&trade.signal_id) {
-                Ok(owner) => owner,
-                Err(e) => {
-                    tracing::error!(error = %e, "Failed to lookup signal owner for SQLite position persistence");
-                    None
+        if let Some(store) = sqlite_store.as_ref() {
+            if let Some(pos) = position_snapshot.as_ref() {
+                let owner = match store.lookup_signal_wallet(&trade.signal_id) {
+                    Ok(owner) => owner,
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to lookup signal owner for SQLite position persistence");
+                        None
+                    }
+                };
+                if let Err(e) = store.upsert_position(pos, current_price, Some(unrealized), owner.as_deref()) {
+                    tracing::error!(error = %e, "Failed to persist position to SQLite");
                 }
-            };
-            if let Err(e) = store.upsert_position(pos, current_price, Some(unrealized), owner.as_deref()) {
-                tracing::error!(error = %e, "Failed to persist position to SQLite");
+            } else {
+                match store.list_open_positions() {
+                    Ok(rows) => {
+                        for row in rows.into_iter().filter(|row| {
+                            row.position.market_id == trade.market_id && row.position.side == trade.side
+                        }) {
+                            if let Err(e) = store.remove_position(&row.position.id) {
+                                tracing::error!(error = %e, position_id = %row.position.id, "Failed to remove closed SQLite position");
+                            }
+                        }
+                    }
+                    Err(e) => tracing::error!(error = %e, "Failed to load SQLite positions for removal"),
+                }
             }
+
             if let Err(e) = update_daily_stats(store, config, &metrics, &trade, unrealized) {
                 tracing::error!(error = %e, "Failed to update SQLite daily stats");
             }
@@ -187,16 +306,28 @@ async fn run_in_memory(
 mod tests {
     use super::*;
     use chrono::Utc;
-    use polybot_common::types::{Category, OrderDirection, OrderType, Side};
+    use crate::state::sqlite::CopiedLotRow;
+    use polybot_common::types::{Category, OrderType, Side, TradeDirection};
+    use rust_decimal_macros::dec;
 
     fn test_trade(market_id: &str, side: Side, category: Category) -> Trade {
+        test_trade_with_direction(market_id, side, category, TradeDirection::Buy)
+    }
+
+    fn test_trade_with_direction(
+        market_id: &str,
+        side: Side,
+        category: Category,
+        direction: TradeDirection,
+    ) -> Trade {
         Trade {
             id: format!("trade-{market_id}-{side:?}"),
             signal_id: "signal-1".to_string(),
+            source_wallet: "0xabc123abc123abc123abc123abc123abc123abc1".to_string(),
             market_id: market_id.to_string(),
             category,
             side,
-            direction: OrderDirection::Buy,
+            direction,
             price: Decimal::new(50, 2),
             size: Decimal::new(10, 0),
             size_usd: Decimal::new(500, 2),
@@ -325,6 +456,176 @@ mod tests {
         assert_eq!(stats.trades_placed, 1);
         assert_eq!(stats.trades_filled, 1);
         assert_eq!(stats.volume_traded, Decimal::new(500, 2));
+
+        let _ = std::fs::remove_file(sqlite_path);
+        std::env::remove_var("POLYBOT_SQLITE_PATH");
+    }
+
+    #[tokio::test]
+    async fn run_in_memory_removes_persisted_open_row_when_sell_fully_exits() {
+        let sqlite_path = std::env::temp_dir().join(format!("polybot-state-{}.db", uuid::Uuid::new_v4()));
+        std::env::set_var("POLYBOT_SQLITE_PATH", &sqlite_path);
+
+        let store = sqlite::SqliteStore::open(&sqlite_path).unwrap();
+        let position = polybot_common::types::Position {
+            id: "pos-1".to_string(),
+            market_id: "m1".to_string(),
+            side: Side::Yes,
+            entry_price: Decimal::new(50, 2),
+            current_size: Decimal::new(10, 0),
+            average_price: Decimal::new(50, 2),
+            opened_at: Utc::now(),
+            status: polybot_common::types::PositionStatus::Open,
+            category: Category::Politics,
+        };
+        store
+            .upsert_position(&position, Some(Decimal::new(50, 2)), Some(Decimal::ZERO), Some("0xabc123abc123abc123abc123abc123abc123abc1"))
+            .unwrap();
+
+        let metrics = Arc::new(Metrics::new());
+        let position_manager = Arc::new(Mutex::new(positions::PositionManager::new()));
+        {
+            let mut manager = position_manager.lock().await;
+            manager
+                .update_from_trade(&test_trade("m1", Side::Yes, Category::Politics))
+                .unwrap();
+        }
+        let market_prices = Arc::new(RwLock::new(HashMap::new()));
+        let (tx, rx) = mpsc::channel(4);
+        let config = AppConfig::default();
+
+        tx.send(test_trade_with_direction(
+            "m1",
+            Side::Yes,
+            Category::Politics,
+            TradeDirection::Sell,
+        ))
+        .await
+        .unwrap();
+        drop(tx);
+
+        run_in_memory(
+            rx,
+            metrics,
+            position_manager,
+            market_prices,
+            Some(sqlite_path.to_string_lossy().as_ref()),
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let reopened = sqlite::SqliteStore::open(&sqlite_path).unwrap();
+        let positions = reopened.list_open_positions().unwrap();
+        assert!(positions.is_empty());
+
+        let _ = std::fs::remove_file(sqlite_path);
+        std::env::remove_var("POLYBOT_SQLITE_PATH");
+    }
+
+    #[tokio::test]
+    async fn partial_sell_fill_reduces_lot_without_retrying() {
+        let sqlite_path = std::env::temp_dir().join(format!("polybot-state-{}.db", uuid::Uuid::new_v4()));
+        std::env::set_var("POLYBOT_SQLITE_PATH", &sqlite_path);
+
+        let store = sqlite::SqliteStore::open(&sqlite_path).unwrap();
+        store
+            .upsert_copied_lot(&CopiedLotRow {
+                id: "lot-1".to_string(),
+                source_wallet: "0xabc123abc123abc123abc123abc123abc123abc1".to_string(),
+                market_id: "m1".to_string(),
+                side: "YES".to_string(),
+                current_size: dec!(10),
+                average_price: dec!(0.50),
+                opened_at: Utc::now().to_rfc3339(),
+                updated_at: Utc::now().to_rfc3339(),
+                last_signal_id: Some("signal-1".to_string()),
+                last_tx_hash: None,
+            })
+            .unwrap();
+
+        let metrics = Arc::new(Metrics::new());
+        let position_manager = Arc::new(Mutex::new(positions::PositionManager::new()));
+        let market_prices = Arc::new(RwLock::new(HashMap::new()));
+        let (tx, rx) = mpsc::channel(4);
+        let config = AppConfig::default();
+
+        let mut trade = test_trade_with_direction("m1", Side::Yes, Category::Politics, TradeDirection::Sell);
+        trade.size = dec!(10);
+        trade.filled_size = dec!(3);
+        trade.size_usd = dec!(1.5);
+        trade.status = TradeStatus::PartiallyFilled;
+        trade.simulated = false;
+
+        tx.send(trade).await.unwrap();
+        drop(tx);
+
+        run_in_memory(
+            rx,
+            metrics,
+            position_manager,
+            market_prices,
+            Some(sqlite_path.to_string_lossy().as_ref()),
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let reopened = sqlite::SqliteStore::open(&sqlite_path).unwrap();
+        let copied_lot = reopened
+            .get_copied_lot(
+                "0xabc123abc123abc123abc123abc123abc123abc1",
+                "m1",
+                "YES",
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(copied_lot.current_size, dec!(7));
+
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let stats = reopened.get_daily_stats(&today).unwrap().unwrap();
+        assert_eq!(stats.volume_traded, dec!(1.5));
+
+        let _ = std::fs::remove_file(sqlite_path);
+        std::env::remove_var("POLYBOT_SQLITE_PATH");
+    }
+
+    #[tokio::test]
+    async fn simulated_filled_trade_does_not_mutate_copied_lots() {
+        let sqlite_path = std::env::temp_dir().join(format!("polybot-state-{}.db", uuid::Uuid::new_v4()));
+        std::env::set_var("POLYBOT_SQLITE_PATH", &sqlite_path);
+
+        let metrics = Arc::new(Metrics::new());
+        let position_manager = Arc::new(Mutex::new(positions::PositionManager::new()));
+        let market_prices = Arc::new(RwLock::new(HashMap::new()));
+        let (tx, rx) = mpsc::channel(4);
+        let config = AppConfig::default();
+
+        let trade = test_trade("m1", Side::Yes, Category::Politics);
+        assert!(trade.simulated);
+        tx.send(trade).await.unwrap();
+        drop(tx);
+
+        run_in_memory(
+            rx,
+            metrics,
+            position_manager,
+            market_prices,
+            Some(sqlite_path.to_string_lossy().as_ref()),
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let reopened = sqlite::SqliteStore::open(&sqlite_path).unwrap();
+        let copied_lot = reopened
+            .get_copied_lot(
+                "0xabc123abc123abc123abc123abc123abc123abc1",
+                "m1",
+                "YES",
+            )
+            .unwrap();
+        assert!(copied_lot.is_none());
 
         let _ = std::fs::remove_file(sqlite_path);
         std::env::remove_var("POLYBOT_SQLITE_PATH");

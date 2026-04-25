@@ -7,7 +7,7 @@ pub mod transport;
 
 use polybot_common::constants::MIN_POSITION_USDC;
 use polybot_common::errors::PolybotError;
-use polybot_common::types::{Decision, ExecutionMode, OrderType, RiskDecision, Trade};
+use polybot_common::types::{Decision, ExecutionMode, OrderType, RiskDecision, Trade, TradeStatus};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
@@ -307,6 +307,15 @@ pub async fn run_execution_engine(
                         loop {
                             match client.submit_order(&order).await {
                                 Ok(trade) => {
+                                    if matches!(trade.status, TradeStatus::PartiallyFilled) {
+                                        tracing::info!(
+                                            signal_id = %decision.signal_id,
+                                            market_id = %decision.market_id,
+                                            filled_size = %trade.filled_size,
+                                            requested_size = %trade.size,
+                                            "Partial fill received; forwarding filled amount to state without retrying remainder"
+                                        );
+                                    }
                                     metrics.record_latency(started.elapsed().as_micros() as u64);
                                     metrics.record_trade(false);
                                     metrics.broadcast_event("trade_placed", serde_json::json!({

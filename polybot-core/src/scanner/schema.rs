@@ -1,5 +1,5 @@
 use polybot_common::errors::PolybotError;
-use polybot_common::types::{Category, ScannerEvent, Side, Signal, SignalSource};
+use polybot_common::types::{Category, ScannerEvent, Side, Signal, SignalSource, TradeDirection};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 use std::time::Instant;
@@ -69,6 +69,17 @@ fn normalize_trade_side(raw: &str) -> Result<Side, PolybotError> {
     }
 }
 
+fn parse_trade_direction(raw: &str) -> Result<TradeDirection, PolybotError> {
+    match raw.to_uppercase().as_str() {
+        "BUY" => Ok(TradeDirection::Buy),
+        "SELL" => Ok(TradeDirection::Sell),
+        other => Err(PolybotError::Scanner(format!(
+            "Invalid trade direction: {}",
+            other
+        ))),
+    }
+}
+
 pub fn normalize_data_api_trade(json: &str, source: SignalSource) -> Result<Signal, PolybotError> {
     let raw: serde_json::Value = serde_json::from_str(json)
         .map_err(|e| PolybotError::Scanner(format!("JSON parse error: {}", e)))?;
@@ -120,6 +131,7 @@ pub fn normalize_data_api_trade(json: &str, source: SignalSource) -> Result<Sign
         });
 
     let target_size_usdc = parse_optional_decimal(&raw, "usdcSize");
+    let target_size_tokens = parse_optional_decimal(&raw, "size");
     let target_price = parse_optional_decimal(&raw, "price");
 
     Ok(Signal {
@@ -132,6 +144,11 @@ pub fn normalize_data_api_trade(json: &str, source: SignalSource) -> Result<Sign
             .ok_or_else(|| PolybotError::Scanner("Missing conditionId field".to_string()))?
             .to_string(),
         side: normalize_trade_side(outcome)?,
+        direction: parse_trade_direction(
+            raw.get("side")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| PolybotError::Scanner("Missing or invalid side field".to_string()))?,
+        )?,
         confidence: 8,
         secret_level: 8,
         category,
@@ -146,6 +163,7 @@ pub fn normalize_data_api_trade(json: &str, source: SignalSource) -> Result<Sign
             .map(|value| value.to_string()),
         target_price,
         target_size_usdc,
+        target_size_tokens,
         resolved: raw
             .get("resolved")
             .and_then(|value| value.as_bool())
@@ -190,6 +208,13 @@ pub fn parse_signal(json: &str) -> Result<Signal, PolybotError> {
         .and_then(|v| v.as_f64())
         .map(|v| Decimal::try_from(v).unwrap_or(Decimal::ZERO));
 
+    let direction = match raw.get("direction") {
+        Some(value) => parse_trade_direction(value.as_str().ok_or_else(|| {
+            PolybotError::Scanner("Invalid direction: must be BUY or SELL".to_string())
+        })?)?,
+        None => TradeDirection::Buy,
+    };
+
     let signal = Signal {
         signal_id: raw
             .get("signal_id")
@@ -212,6 +237,7 @@ pub fn parse_signal(json: &str) -> Result<Signal, PolybotError> {
             .unwrap_or("")
             .to_string(),
         side,
+        direction,
         confidence: raw.get("confidence").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
         secret_level: raw
             .get("secret_level")
@@ -229,6 +255,7 @@ pub fn parse_signal(json: &str) -> Result<Signal, PolybotError> {
             .map(|value| value.to_string()),
         target_price: parse_optional_decimal(&raw, "target_price"),
         target_size_usdc: parse_optional_decimal(&raw, "target_size_usdc"),
+        target_size_tokens: parse_optional_decimal(&raw, "target_size_tokens"),
         resolved: raw
             .get("resolved")
             .and_then(|v| v.as_bool())
@@ -353,6 +380,59 @@ mod tests {
     }
 
     #[test]
+    fn parse_signal_reads_direction_when_present() {
+        let json = r#"{
+            "signal_id": "550e8400-e29b-41d4-a716-446655440000",
+            "timestamp": "2026-04-14T12:34:56.789Z",
+            "wallet_address": "0xabc123abc123abc123abc123abc123abc123abc1",
+            "market_id": "polymarket-clob-market-123",
+            "side": "YES",
+            "direction": "SELL",
+            "confidence": 7,
+            "secret_level": 6,
+            "category": "politics"
+        }"#;
+
+        let signal = parse_signal(json).unwrap();
+        assert_eq!(signal.direction, TradeDirection::Sell);
+    }
+
+    #[test]
+    fn parse_signal_defaults_direction_to_buy_when_omitted() {
+        let json = r#"{
+            "signal_id": "550e8400-e29b-41d4-a716-446655440000",
+            "timestamp": "2026-04-14T12:34:56.789Z",
+            "wallet_address": "0xabc123abc123abc123abc123abc123abc123abc1",
+            "market_id": "polymarket-clob-market-123",
+            "side": "YES",
+            "confidence": 7,
+            "secret_level": 6,
+            "category": "politics"
+        }"#;
+
+        let signal = parse_signal(json).unwrap();
+        assert_eq!(signal.direction, TradeDirection::Buy);
+    }
+
+    #[test]
+    fn parse_signal_rejects_malformed_explicit_direction() {
+        let json = r#"{
+            "signal_id": "550e8400-e29b-41d4-a716-446655440000",
+            "timestamp": "2026-04-14T12:34:56.789Z",
+            "wallet_address": "0xabc123abc123abc123abc123abc123abc123abc1",
+            "market_id": "polymarket-clob-market-123",
+            "side": "YES",
+            "direction": 123,
+            "confidence": 7,
+            "secret_level": 6,
+            "category": "politics"
+        }"#;
+
+        let result = parse_signal(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn normalize_data_api_trade_to_signal() {
         let json = r#"{
             "proxyWallet": "0xabc123abc123abc123abc123abc123abc123abc1",
@@ -395,6 +475,51 @@ mod tests {
             signal.suggested_size_usdc,
             Some(Decimal::from_str("5.7").unwrap())
         );
+    }
+
+    #[test]
+    fn normalize_data_api_trade_preserves_sell_direction_and_token_size() {
+        let json = r#"{
+            "proxyWallet": "0xabc123abc123abc123abc123abc123abc123abc1",
+            "timestamp": 1760000000,
+            "conditionId": "0xdef456def456def456def456def456def456def456def456def456def456def4",
+            "type": "TRADE",
+            "side": "SELL",
+            "outcome": "YES",
+            "size": 12.5,
+            "usdcSize": 7.5,
+            "price": 0.60,
+            "asset": "123456789",
+            "transactionHash": "0xfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeed"
+        }"#;
+
+        let signal = normalize_data_api_trade(json, SignalSource::Polling).unwrap();
+        assert_eq!(signal.side, Side::Yes);
+        assert_eq!(signal.direction, TradeDirection::Sell);
+        assert_eq!(
+            signal.target_size_tokens,
+            Some(Decimal::from_str("12.5").unwrap())
+        );
+    }
+
+    #[test]
+    fn normalize_data_api_trade_rejects_malformed_side() {
+        let json = r#"{
+            "proxyWallet": "0xabc123abc123abc123abc123abc123abc123abc1",
+            "timestamp": 1760000000,
+            "conditionId": "0xdef456def456def456def456def456def456def456def456def456def456def4",
+            "type": "TRADE",
+            "side": 123,
+            "outcome": "YES",
+            "size": 12.5,
+            "usdcSize": 7.5,
+            "price": 0.60,
+            "asset": "123456789",
+            "transactionHash": "0xfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeed"
+        }"#;
+
+        let result = normalize_data_api_trade(json, SignalSource::Polling);
+        assert!(result.is_err());
     }
 
     #[test]
