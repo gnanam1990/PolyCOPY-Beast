@@ -240,6 +240,50 @@ pub fn build_redeem_positions_plan(
     })
 }
 
+fn validate_plan_shape(plan: &CollateralOperationPlan) -> Result<usize, PolybotError> {
+    if plan.transactions.is_empty() {
+        return Err(PolybotError::Config(format!(
+            "{:?} collateral operation produced no transactions",
+            plan.kind
+        )));
+    }
+
+    for transaction in &plan.transactions {
+        parse_address(&transaction.to, "gasless transaction target")?;
+        if !transaction.data.starts_with("0x") || transaction.data.len() < 10 {
+            return Err(PolybotError::Config(format!(
+                "{:?} collateral operation produced malformed calldata",
+                plan.kind
+            )));
+        }
+        if transaction.value != "0" {
+            return Err(PolybotError::Config(format!(
+                "{:?} collateral operation must not send POL value",
+                plan.kind
+            )));
+        }
+    }
+
+    Ok(plan.transactions.len())
+}
+
+pub fn validate_live_collateral_operation_plans(
+    config: &CollateralConfig,
+    trading_wallet: &str,
+    condition_id: &str,
+) -> Result<usize, PolybotError> {
+    let plans = [
+        build_wrap_plan(config, trading_wallet, Decimal::ONE)?,
+        build_unwrap_plan(config, trading_wallet, Decimal::ONE)?,
+        build_trading_approval_plan(config)?,
+        build_redeem_positions_plan(config, condition_id, vec![1, 2])?,
+    ];
+
+    plans.iter().try_fold(0usize, |count, plan| {
+        validate_plan_shape(plan).map(|plan_count| count + plan_count)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,5 +377,30 @@ mod tests {
         let err = build_redeem_positions_plan(&config(), condition_id, vec![]).unwrap_err();
 
         assert!(err.to_string().contains("at least one index set"));
+    }
+
+    #[test]
+    fn live_collateral_plan_validation_covers_all_operation_types() {
+        let condition_id = "0xaf5e903876ad42de97e1cf02c2ef8484df69bcfc5541b96a400116557d1e504e";
+        let transaction_count = validate_live_collateral_operation_plans(
+            &config(),
+            "0x1111111111111111111111111111111111111111",
+            condition_id,
+        )
+        .unwrap();
+
+        assert_eq!(transaction_count, 8);
+    }
+
+    #[test]
+    fn live_collateral_plan_validation_rejects_bad_condition_id() {
+        let err = validate_live_collateral_operation_plans(
+            &config(),
+            "0x1111111111111111111111111111111111111111",
+            "bad-condition-id",
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("condition_id"));
     }
 }

@@ -9,12 +9,23 @@ pub struct StartupPreflightReport {
     pub execution_mode: ExecutionMode,
     pub wallet_mode: Option<WalletMode>,
     pub approvals_ready: Option<bool>,
+    pub collateral_plan_transactions: Option<usize>,
 }
 
 impl StartupPreflightReport {
     pub fn summary(&self) -> String {
-        match (self.wallet_mode, self.approvals_ready) {
-            (Some(wallet_mode), Some(approvals_ready)) => format!(
+        match (
+            self.wallet_mode,
+            self.approvals_ready,
+            self.collateral_plan_transactions,
+        ) {
+            (Some(wallet_mode), Some(approvals_ready), Some(collateral_plan_transactions)) => {
+                format!(
+                    "mode={:?} wallet_mode={} approvals_ready={} collateral_plan_transactions={}",
+                    self.execution_mode, wallet_mode, approvals_ready, collateral_plan_transactions
+                )
+            }
+            (Some(wallet_mode), Some(approvals_ready), None) => format!(
                 "mode={:?} wallet_mode={} approvals_ready={}",
                 self.execution_mode, wallet_mode, approvals_ready
             ),
@@ -56,6 +67,7 @@ pub async fn run_startup_preflight(
             execution_mode: config.system.execution_mode,
             wallet_mode: None,
             approvals_ready: None,
+            collateral_plan_transactions: None,
         });
     }
 
@@ -96,10 +108,26 @@ pub async fn run_startup_preflight(
         execution_mode: config.system.execution_mode,
         wallet_mode: None,
         approvals_ready: None,
+        collateral_plan_transactions: None,
     };
 
     let client = ClobClient::from_env()?;
     let wallet_mode = client.validate_wallet_mode()?;
+    let trading_wallet = client.trading_wallet_address()?;
+    if matches!(config.system.execution_mode, ExecutionMode::Live) {
+        let collateral_plan_transactions =
+            crate::execution::v2_collateral::validate_live_collateral_operation_plans(
+                &config.collateral,
+                &trading_wallet.to_string(),
+                &condition_id,
+            )?;
+        tracing::info!(
+            trading_wallet = %trading_wallet,
+            collateral_plan_transactions,
+            "Validated V2 collateral wrap/unwrap/approval/redeem operation plans"
+        );
+        report.collateral_plan_transactions = Some(collateral_plan_transactions);
+    }
     let _credentials = client.authenticate().await?;
     let approvals = client.check_approvals().await?;
 
