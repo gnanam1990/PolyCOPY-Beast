@@ -121,6 +121,25 @@ fn select_order_type(decision: &RiskDecision) -> OrderType {
     }
 }
 
+pub fn select_v2_order_type(
+    decision: &RiskDecision,
+    fee_schedule: Option<FeeSchedule>,
+    fok_max_fee_bps: u32,
+) -> OrderType {
+    let Some(fee_schedule) = fee_schedule else {
+        return OrderType::Limit;
+    };
+
+    let combined = decision.confidence_multiplier * decision.secret_level_multiplier;
+    if combined >= rust_decimal_macros::dec!(1.5)
+        && fee_schedule.taker_bps_true() <= fok_max_fee_bps
+    {
+        OrderType::Fok
+    } else {
+        OrderType::Limit
+    }
+}
+
 pub fn create_simulated_trade(decision: &RiskDecision, order: &Order) -> Trade {
     Trade {
         id: uuid::Uuid::new_v4().to_string(),
@@ -202,6 +221,43 @@ mod tests {
         let decision = test_decision(dec!(0.5), dec!(0.6)); // 0.3 combined
         let order = build_order(&decision, &test_market_context(), dec!(0.50), dec!(50));
         assert_eq!(order.order_type, OrderType::Limit);
+    }
+
+    #[test]
+    fn v2_routing_defaults_to_limit_when_fee_schedule_missing() {
+        let decision = test_decision(dec!(1.5), dec!(1.0));
+
+        let order_type = select_v2_order_type(&decision, None, 50);
+
+        assert_eq!(order_type, OrderType::Limit);
+    }
+
+    #[test]
+    fn v2_routing_allows_fok_under_fee_threshold() {
+        let decision = test_decision(dec!(1.5), dec!(1.0));
+        let fee_schedule = FeeSchedule {
+            taker_fee_bps: 2_000,
+            maker_fee_bps: 0,
+            rebate_bps: 0,
+        };
+
+        let order_type = select_v2_order_type(&decision, Some(fee_schedule), 50);
+
+        assert_eq!(order_type, OrderType::Fok);
+    }
+
+    #[test]
+    fn v2_routing_uses_limit_when_taker_fee_exceeds_threshold() {
+        let decision = test_decision(dec!(1.5), dec!(1.0));
+        let fee_schedule = FeeSchedule {
+            taker_fee_bps: 12_500,
+            maker_fee_bps: 0,
+            rebate_bps: 0,
+        };
+
+        let order_type = select_v2_order_type(&decision, Some(fee_schedule), 50);
+
+        assert_eq!(order_type, OrderType::Limit);
     }
 
     #[test]
