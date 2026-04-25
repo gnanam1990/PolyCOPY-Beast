@@ -17,7 +17,6 @@ use polybot_common::constants::MIN_POSITION_USDC;
 use polybot_common::errors::PolybotError;
 use polybot_common::types::{Decision, ExecutionMode, OrderType, RiskDecision, Trade, TradeStatus};
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -163,7 +162,7 @@ pub async fn run_execution_engine(
                     "Executing trade"
                 );
 
-                let mut target_price = dec!(0.50);
+                let mut target_price = config.paper.fixed_entry_price;
                 let mut size_usd = decision.position_size_usd;
                 let mut market_context =
                     clob_client::MarketContext::simulation(decision.market_id.clone());
@@ -302,12 +301,17 @@ pub async fn run_execution_engine(
                     continue;
                 }
 
+                let effective_price_buffer = if execution_mode == ExecutionMode::Simulation {
+                    Decimal::ZERO
+                } else {
+                    config.execution.price_buffer
+                };
                 let order = order_builder::build_order_with_price_buffer(
                     &decision,
                     &market_context,
                     target_price,
                     size_usd,
-                    config.execution.price_buffer,
+                    effective_price_buffer,
                     OrderType::Fok,
                 );
 

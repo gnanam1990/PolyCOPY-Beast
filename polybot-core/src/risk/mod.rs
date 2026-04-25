@@ -94,11 +94,7 @@ impl RiskEngine {
                     .collect::<BTreeSet<_>>()
             })
             .unwrap_or_default();
-        let initial_balance = if config.risk.base_size_pct > Decimal::ZERO {
-            config.risk.base_size_usd / config.risk.base_size_pct
-        } else {
-            config.risk.base_size_usd
-        };
+        let initial_balance = config.paper.starting_balance_usd;
 
         Self {
             config,
@@ -116,12 +112,8 @@ impl RiskEngine {
         }
     }
 
-    fn portfolio_reference_usd(&self, risk_config: &RiskConfig) -> Decimal {
-        if risk_config.base_size_pct > Decimal::ZERO {
-            risk_config.base_size_usd / risk_config.base_size_pct
-        } else {
-            risk_config.base_size_usd
-        }
+    fn portfolio_reference_usd(&self, _risk_config: &RiskConfig) -> Decimal {
+        self.config.paper.starting_balance_usd
     }
 
     fn copied_lot_side_key(side: polybot_common::types::Side) -> &'static str {

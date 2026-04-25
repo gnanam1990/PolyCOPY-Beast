@@ -65,6 +65,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Shared metrics — accessible from all subsystems
     let metrics = Arc::new(metrics::Metrics::new());
+    metrics.update_v2_accounting(
+        config.paper.starting_balance_usd,
+        rust_decimal::Decimal::ZERO,
+        rust_decimal::Decimal::ZERO,
+        rust_decimal::Decimal::ZERO,
+    );
     let position_manager = Arc::new(tokio::sync::Mutex::new(
         state::positions::PositionManager::new(),
     ));
@@ -74,6 +80,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             state::recover_from_sqlite(&store, metrics.clone(), position_manager.clone()).await
         {
             tracing::error!(error = %e, "Failed to recover state from SQLite");
+        } else {
+            let recovered_exposure = position_manager.lock().await.total_exposure();
+            let recovered_available = (config.paper.starting_balance_usd - recovered_exposure)
+                .max(rust_decimal::Decimal::ZERO);
+            metrics.update_v2_accounting(
+                recovered_available,
+                rust_decimal::Decimal::ZERO,
+                rust_decimal::Decimal::ZERO,
+                rust_decimal::Decimal::ZERO,
+            );
         }
     }
 
@@ -144,11 +160,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         paused: false,
         metrics: metrics.clone(),
         sqlite_path: sqlite_path.clone(),
-        starting_balance: if config.risk.base_size_pct > rust_decimal::Decimal::ZERO {
-            config.risk.base_size_usd / config.risk.base_size_pct
-        } else {
-            config.risk.base_size_usd
-        },
+        starting_balance: config.paper.starting_balance_usd,
+        fixed_entry_price: config.paper.fixed_entry_price,
         risk_engine: risk_engine.clone(),
         position_manager: position_manager.clone(),
         event_tx: event_tx.clone(),
