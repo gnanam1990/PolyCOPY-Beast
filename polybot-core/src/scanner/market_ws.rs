@@ -29,7 +29,10 @@ impl MarketFastPath {
         }
     }
 
-    pub async fn run(&self, trigger_tx: mpsc::Sender<WalletPollTrigger>) -> Result<(), PolybotError> {
+    pub async fn run(
+        &self,
+        trigger_tx: mpsc::Sender<WalletPollTrigger>,
+    ) -> Result<(), PolybotError> {
         loop {
             let assets = self.state.read().await.tracked_assets();
             if assets.is_empty() {
@@ -59,14 +62,14 @@ impl MarketFastPath {
             return Ok(());
         }
 
-        let ws_client = WsClient::new(&self.ws_endpoint, WsConfig::default())
-            .map_err(|e| PolybotError::Scanner(format!("Market WS client creation failed: {}", e)))?;
+        let ws_client = WsClient::new(&self.ws_endpoint, WsConfig::default()).map_err(|e| {
+            PolybotError::Scanner(format!("Market WS client creation failed: {}", e))
+        })?;
 
-        let mut stream = Box::pin(
-            ws_client
-                .subscribe_orderbook(asset_ids)
-                .map_err(|e| PolybotError::Scanner(format!("Market WS subscription failed: {}", e)))?,
-        );
+        let mut stream =
+            Box::pin(ws_client.subscribe_orderbook(asset_ids).map_err(|e| {
+                PolybotError::Scanner(format!("Market WS subscription failed: {}", e))
+            })?);
 
         loop {
             tokio::select! {

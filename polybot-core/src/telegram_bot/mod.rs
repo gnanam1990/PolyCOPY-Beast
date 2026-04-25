@@ -48,7 +48,11 @@ fn parse_wallet_args(s: String) -> Result<(String, Option<String>), ParseError> 
 }
 
 #[derive(BotCommands, Clone, Debug, PartialEq)]
-#[command(rename_rule = "lowercase", description = "PolyBot v3 commands", parse_with = "split")]
+#[command(
+    rename_rule = "lowercase",
+    description = "PolyBot v3 commands",
+    parse_with = "split"
+)]
 pub enum Command {
     #[command(description = "Show system status")]
     Status,
@@ -104,10 +108,9 @@ pub async fn start_telegram_bot(
     }
 
     let bot = Bot::new(bot_token);
-    bot.get_me()
-        .send()
-        .await
-        .map_err(|e| PolybotError::Telegram(format!("Telegram bot authentication failed: {}", e)))?;
+    bot.get_me().send().await.map_err(|e| {
+        PolybotError::Telegram(format!("Telegram bot authentication failed: {}", e))
+    })?;
 
     // Shared state for auth, confirm, and rate limiting
     let auth = Arc::new(auth::AuthService::new(allowed_users));
@@ -122,7 +125,12 @@ pub async fn start_telegram_bot(
         "Telegram bot starting with auth"
     );
 
-    alerts::spawn_dispatcher(bot.clone(), auth.allowed_users(), metrics.clone(), alert_receiver);
+    alerts::spawn_dispatcher(
+        bot.clone(),
+        auth.allowed_users(),
+        metrics.clone(),
+        alert_receiver,
+    );
 
     let ctx = commands::CommandContext {
         auth,

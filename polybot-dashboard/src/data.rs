@@ -11,6 +11,11 @@ pub struct HealthData {
     pub last_signal_at: Option<String>,
     pub daily_pnl: String,
     pub balance_usd: String,
+    pub virtual_pusd: String,
+    pub reserved_pusd: String,
+    pub fees_paid: String,
+    pub rebates_earned: String,
+    pub live_disabled_reason: Option<String>,
     pub drawdown_pct: String,
     pub paused: bool,
     pub open_positions: u64,
@@ -77,13 +82,29 @@ pub struct DailyStatsData {
     pub entries: Vec<DailyStatsEntry>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionData {
+    pub transaction_id: String,
+    pub trade_id: Option<String>,
+    pub kind: String,
+    pub state: String,
+    pub submitted_at: String,
+    pub confirmed_at: Option<String>,
+    pub transaction_hash: Option<String>,
+    pub error_msg: Option<String>,
+}
+
 fn api_path(path: &str) -> String {
     path.to_string()
 }
 
 pub fn market_link(market_id: &str) -> (String, String) {
     let display = if market_id.len() > 12 {
-        format!("{}...{}", &market_id[..6], &market_id[market_id.len() - 4..])
+        format!(
+            "{}...{}",
+            &market_id[..6],
+            &market_id[market_id.len() - 4..]
+        )
     } else {
         market_id.to_string()
     };
@@ -221,6 +242,17 @@ pub async fn fetch_signals(limit: usize) -> Result<Vec<SignalData>, String> {
         .json()
         .await
         .map_err(|e| format!("Signals parse error: {}", e))
+}
+
+pub async fn fetch_transactions(limit: usize) -> Result<Vec<TransactionData>, String> {
+    let url = format!("{}?limit={}", api_path("/transactions"), limit);
+    gloo_net::http::Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Transactions fetch error: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Transactions parse error: {}", e))
 }
 
 pub async fn fetch_daily_stats() -> Result<Vec<DailyStatsEntry>, String> {

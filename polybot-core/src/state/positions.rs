@@ -46,17 +46,20 @@ impl PositionManager {
             return Ok(());
         }
 
-        let position = self.positions.entry(key.clone()).or_insert_with(|| Position {
-            id: uuid::Uuid::new_v4().to_string(),
-            market_id: trade.market_id.clone(),
-            side: trade.side,
-            entry_price: trade.price,
-            current_size: Decimal::ZERO,
-            average_price: Decimal::ZERO,
-            opened_at: Utc::now(),
-            status: PositionStatus::Open,
-            category: trade.category,
-        });
+        let position = self
+            .positions
+            .entry(key.clone())
+            .or_insert_with(|| Position {
+                id: uuid::Uuid::new_v4().to_string(),
+                market_id: trade.market_id.clone(),
+                side: trade.side,
+                entry_price: trade.price,
+                current_size: Decimal::ZERO,
+                average_price: Decimal::ZERO,
+                opened_at: Utc::now(),
+                status: PositionStatus::Open,
+                category: trade.category,
+            });
 
         let signed_fill = match trade.direction {
             TradeDirection::Buy => trade.filled_size,
@@ -207,14 +210,7 @@ mod tests {
         category: Category,
         direction: TradeDirection,
     ) -> Trade {
-        test_trade_with_direction(
-            market_id,
-            price,
-            filled_size,
-            side,
-            category,
-            direction,
-        )
+        test_trade_with_direction(market_id, price, filled_size, side, category, direction)
     }
 
     fn test_trade_with_direction(
@@ -441,9 +437,7 @@ mod tests {
         ))
         .unwrap();
 
-        let pos = pm
-            .get_position(&PositionKey::new("m1", Side::Yes))
-            .unwrap();
+        let pos = pm.get_position(&PositionKey::new("m1", Side::Yes)).unwrap();
         assert_eq!(pos.current_size, dec!(70));
         // Average price preserved — SELLs don't re-cost remaining shares.
         assert_eq!(pos.average_price, dec!(0.50));
@@ -552,9 +546,7 @@ mod tests {
         ))
         .unwrap();
 
-        let pos = pm
-            .get_position(&PositionKey::new("m1", Side::Yes))
-            .unwrap();
+        let pos = pm.get_position(&PositionKey::new("m1", Side::Yes)).unwrap();
         assert_eq!(pos.current_size, dec!(100));
         assert_eq!(pos.average_price, dec!(0.50));
     }
@@ -641,7 +633,9 @@ mod tests {
         ))
         .unwrap();
 
-        assert!(pm.get_position(&PositionKey::new("m1", Side::Yes)).is_none());
+        assert!(pm
+            .get_position(&PositionKey::new("m1", Side::Yes))
+            .is_none());
         assert_eq!(pm.open_position_count(), 0);
     }
 
@@ -688,7 +682,9 @@ mod tests {
         ))
         .unwrap();
 
-        assert!(pm.get_position(&PositionKey::new("m1", Side::Yes)).is_none());
+        assert!(pm
+            .get_position(&PositionKey::new("m1", Side::Yes))
+            .is_none());
         assert_eq!(pm.open_position_count(), 0);
     }
 

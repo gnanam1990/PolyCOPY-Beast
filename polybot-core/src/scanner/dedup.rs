@@ -141,10 +141,8 @@ mod tests {
     fn dedup_prefers_tx_hash_when_present() {
         let mut filter = DedupFilter::new(300);
         let mut event1 = test_event("sig-1");
-        event1.signal.tx_hash = Some(
-            "0xfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeed"
-                .to_string(),
-        );
+        event1.signal.tx_hash =
+            Some("0xfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeed".to_string());
         let mut event2 = test_event("sig-2");
         event2.signal.tx_hash = event1.signal.tx_hash.clone();
 

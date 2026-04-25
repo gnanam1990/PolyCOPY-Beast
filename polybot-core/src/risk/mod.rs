@@ -6,8 +6,8 @@ pub mod sizer;
 use polybot_common::constants::{
     confidence_multiplier, drawdown_multiplier as calc_drawdown, secret_level_multiplier,
 };
-use rust_decimal::prelude::ToPrimitive;
 use polybot_common::types::{Decision, RiskDecision, Signal, TradeDirection};
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -41,7 +41,10 @@ fn mirrored_exit_tokens(
     remaining_source_tokens: Option<Decimal>,
 ) -> Option<Decimal> {
     let remaining_source_tokens = remaining_source_tokens?;
-    if copied_tokens <= Decimal::ZERO || sold_tokens <= Decimal::ZERO || remaining_source_tokens < Decimal::ZERO {
+    if copied_tokens <= Decimal::ZERO
+        || sold_tokens <= Decimal::ZERO
+        || remaining_source_tokens < Decimal::ZERO
+    {
         return None;
     }
 
@@ -129,8 +132,8 @@ impl RiskEngine {
     }
 
     async fn fetch_source_remaining_tokens(&self, signal: &Signal) -> Option<Decimal> {
-        let client = polymarket_client_sdk::data::Client::new(&self.config.scanner.data_api_url)
-            .ok()?;
+        let client =
+            polymarket_client_sdk::data::Client::new(&self.config.scanner.data_api_url).ok()?;
         let wallet: polymarket_client_sdk::types::Address = signal.wallet_address.parse().ok()?;
         let side = Self::copied_lot_side_key(signal.side);
         let mut offset = 0;
@@ -159,7 +162,10 @@ impl RiskEngine {
             let batch_size = positions.len();
 
             if let Some(position) = positions.into_iter().find(|position| {
-                position.condition_id.to_string().eq_ignore_ascii_case(&signal.market_id)
+                position
+                    .condition_id
+                    .to_string()
+                    .eq_ignore_ascii_case(&signal.market_id)
                     && position.outcome.eq_ignore_ascii_case(side)
             }) {
                 return Some(position.size);
@@ -245,7 +251,9 @@ impl RiskEngine {
         }
 
         let followed_wallets = self.followed_wallets.read().await;
-        if !followed_wallets.is_empty() && !followed_wallets.contains(&signal.wallet_address.to_lowercase()) {
+        if !followed_wallets.is_empty()
+            && !followed_wallets.contains(&signal.wallet_address.to_lowercase())
+        {
             return RiskDecision {
                 signal_id: signal.signal_id.clone(),
                 source_wallet: signal.wallet_address.clone(),
@@ -266,8 +274,8 @@ impl RiskEngine {
         drop(followed_wallets);
 
         if signal.direction == TradeDirection::Sell {
-            let sqlite_path = std::env::var("POLYBOT_SQLITE_PATH")
-                .unwrap_or_else(|_| "./polybot.db".to_string());
+            let sqlite_path =
+                std::env::var("POLYBOT_SQLITE_PATH").unwrap_or_else(|_| "./polybot.db".to_string());
             let store = match SqliteStore::open(std::path::Path::new(&sqlite_path)) {
                 Ok(store) => store,
                 Err(error) => {
@@ -308,7 +316,9 @@ impl RiskEngine {
                         drawdown_factor: Decimal::ZERO,
                         blocked: true,
                         manual_review: false,
-                        decision: Decision::Skip("no matching copied lot for mirrored sell".to_string()),
+                        decision: Decision::Skip(
+                            "no matching copied lot for mirrored sell".to_string(),
+                        ),
                     };
                 }
                 Err(error) => {
@@ -355,7 +365,9 @@ impl RiskEngine {
                     drawdown_factor: Decimal::ZERO,
                     blocked: true,
                     manual_review: false,
-                    decision: Decision::Skip("remaining source position unavailable for mirrored sell".to_string()),
+                    decision: Decision::Skip(
+                        "remaining source position unavailable for mirrored sell".to_string(),
+                    ),
                 };
             }
 
@@ -380,8 +392,11 @@ impl RiskEngine {
 
         // v3.0: Anti-duplication rule — one owner per token_id.
         if let Some(token_id) = signal.token_id.as_ref() {
-            let sqlite_path = std::env::var("POLYBOT_SQLITE_PATH").unwrap_or_else(|_| "./polybot.db".to_string());
-            if let Ok(store) = crate::state::sqlite::SqliteStore::open(std::path::Path::new(&sqlite_path)) {
+            let sqlite_path =
+                std::env::var("POLYBOT_SQLITE_PATH").unwrap_or_else(|_| "./polybot.db".to_string());
+            if let Ok(store) =
+                crate::state::sqlite::SqliteStore::open(std::path::Path::new(&sqlite_path))
+            {
                 if let Ok(Some(existing_owner)) = store.get_open_position_owner_by_token(token_id) {
                     if existing_owner.to_lowercase() != signal.wallet_address.to_lowercase() {
                         return RiskDecision {
@@ -513,7 +528,9 @@ impl RiskEngine {
         }
 
         // 6. v3: runtime position sizing
-        let target_size_usd = signal.suggested_size_usdc.unwrap_or(risk_config.base_size_usd);
+        let target_size_usd = signal
+            .suggested_size_usdc
+            .unwrap_or(risk_config.base_size_usd);
         let category_max = signal.category.max_single_position_usd();
         let size = sizer::calculate_position_size_v3(
             target_size_usd,
@@ -668,7 +685,8 @@ impl RiskEngine {
         if pnl_usd < Decimal::ZERO {
             *consecutive_losses += 1;
             if *consecutive_losses >= risk.max_consecutive_losses {
-                *self.cooldown_until.lock().await = Some(Instant::now() + Duration::from_secs(risk.loss_cooldown_secs));
+                *self.cooldown_until.lock().await =
+                    Some(Instant::now() + Duration::from_secs(risk.loss_cooldown_secs));
             }
         } else {
             *consecutive_losses = 0;
@@ -676,7 +694,10 @@ impl RiskEngine {
         }
     }
 
-    pub async fn add_followed_wallet(&self, wallet: &str) -> Result<(), polybot_common::errors::PolybotError> {
+    pub async fn add_followed_wallet(
+        &self,
+        wallet: &str,
+    ) -> Result<(), polybot_common::errors::PolybotError> {
         let normalized = wallet.trim().to_lowercase();
         if !normalized.starts_with("0x") || normalized.len() != 42 {
             return Err(polybot_common::errors::PolybotError::Config(
@@ -688,7 +709,10 @@ impl RiskEngine {
     }
 
     pub async fn remove_followed_wallet(&self, wallet: &str) {
-        self.followed_wallets.write().await.remove(&wallet.trim().to_lowercase());
+        self.followed_wallets
+            .write()
+            .await
+            .remove(&wallet.trim().to_lowercase());
     }
 
     pub async fn list_followed_wallets(&self) -> Vec<String> {
@@ -702,20 +726,104 @@ impl RiskEngine {
     ) -> Result<String, polybot_common::errors::PolybotError> {
         let mut risk = self.runtime_risk.write().await;
         match key {
-            "base_size_usd" => risk.base_size_usd = value.parse().map_err(|_| polybot_common::errors::PolybotError::Config("invalid decimal for base_size_usd".to_string()))?,
-            "daily_max_loss_pct" => risk.daily_max_loss_pct = value.parse().map_err(|_| polybot_common::errors::PolybotError::Config("invalid decimal for daily_max_loss_pct".to_string()))?,
-            "per_market_exposure_pct" => risk.per_market_exposure_pct = value.parse().map_err(|_| polybot_common::errors::PolybotError::Config("invalid decimal for per_market_exposure_pct".to_string()))?,
-            "per_category_exposure_pct" => risk.per_category_exposure_pct = value.parse().map_err(|_| polybot_common::errors::PolybotError::Config("invalid decimal for per_category_exposure_pct".to_string()))?,
-            "max_position_size_usd" => risk.max_position_size_usd = value.parse().map_err(|_| polybot_common::errors::PolybotError::Config("invalid decimal for max_position_size_usd".to_string()))?,
-            "max_concurrent_positions" => risk.max_concurrent_positions = value.parse().map_err(|_| polybot_common::errors::PolybotError::Config("invalid integer for max_concurrent_positions".to_string()))?,
-            "min_confidence" => risk.min_confidence = value.parse().map_err(|_| polybot_common::errors::PolybotError::Config("invalid integer for min_confidence".to_string()))?,
-            "min_secret_level" => risk.min_secret_level = value.parse().map_err(|_| polybot_common::errors::PolybotError::Config("invalid integer for min_secret_level".to_string()))?,
-            "slippage_threshold" => risk.slippage_threshold = value.parse().map_err(|_| polybot_common::errors::PolybotError::Config("invalid decimal for slippage_threshold".to_string()))?,
-            "position_multiplier" => risk.position_multiplier = value.parse().map_err(|_| polybot_common::errors::PolybotError::Config("invalid decimal for position_multiplier".to_string()))?,
-            "min_trade_size_usdc" => risk.min_trade_size_usdc = value.parse().map_err(|_| polybot_common::errors::PolybotError::Config("invalid decimal for min_trade_size_usdc".to_string()))?,
-            "min_usdc_balance" => risk.min_usdc_balance = value.parse().map_err(|_| polybot_common::errors::PolybotError::Config("invalid decimal for min_usdc_balance".to_string()))?,
-            "max_consecutive_losses" => risk.max_consecutive_losses = value.parse().map_err(|_| polybot_common::errors::PolybotError::Config("invalid integer for max_consecutive_losses".to_string()))?,
-            "loss_cooldown_secs" => risk.loss_cooldown_secs = value.parse().map_err(|_| polybot_common::errors::PolybotError::Config("invalid integer for loss_cooldown_secs".to_string()))?,
+            "base_size_usd" => {
+                risk.base_size_usd = value.parse().map_err(|_| {
+                    polybot_common::errors::PolybotError::Config(
+                        "invalid decimal for base_size_usd".to_string(),
+                    )
+                })?
+            }
+            "daily_max_loss_pct" => {
+                risk.daily_max_loss_pct = value.parse().map_err(|_| {
+                    polybot_common::errors::PolybotError::Config(
+                        "invalid decimal for daily_max_loss_pct".to_string(),
+                    )
+                })?
+            }
+            "per_market_exposure_pct" => {
+                risk.per_market_exposure_pct = value.parse().map_err(|_| {
+                    polybot_common::errors::PolybotError::Config(
+                        "invalid decimal for per_market_exposure_pct".to_string(),
+                    )
+                })?
+            }
+            "per_category_exposure_pct" => {
+                risk.per_category_exposure_pct = value.parse().map_err(|_| {
+                    polybot_common::errors::PolybotError::Config(
+                        "invalid decimal for per_category_exposure_pct".to_string(),
+                    )
+                })?
+            }
+            "max_position_size_usd" => {
+                risk.max_position_size_usd = value.parse().map_err(|_| {
+                    polybot_common::errors::PolybotError::Config(
+                        "invalid decimal for max_position_size_usd".to_string(),
+                    )
+                })?
+            }
+            "max_concurrent_positions" => {
+                risk.max_concurrent_positions = value.parse().map_err(|_| {
+                    polybot_common::errors::PolybotError::Config(
+                        "invalid integer for max_concurrent_positions".to_string(),
+                    )
+                })?
+            }
+            "min_confidence" => {
+                risk.min_confidence = value.parse().map_err(|_| {
+                    polybot_common::errors::PolybotError::Config(
+                        "invalid integer for min_confidence".to_string(),
+                    )
+                })?
+            }
+            "min_secret_level" => {
+                risk.min_secret_level = value.parse().map_err(|_| {
+                    polybot_common::errors::PolybotError::Config(
+                        "invalid integer for min_secret_level".to_string(),
+                    )
+                })?
+            }
+            "slippage_threshold" => {
+                risk.slippage_threshold = value.parse().map_err(|_| {
+                    polybot_common::errors::PolybotError::Config(
+                        "invalid decimal for slippage_threshold".to_string(),
+                    )
+                })?
+            }
+            "position_multiplier" => {
+                risk.position_multiplier = value.parse().map_err(|_| {
+                    polybot_common::errors::PolybotError::Config(
+                        "invalid decimal for position_multiplier".to_string(),
+                    )
+                })?
+            }
+            "min_trade_size_usdc" => {
+                risk.min_trade_size_usdc = value.parse().map_err(|_| {
+                    polybot_common::errors::PolybotError::Config(
+                        "invalid decimal for min_trade_size_usdc".to_string(),
+                    )
+                })?
+            }
+            "min_usdc_balance" => {
+                risk.min_usdc_balance = value.parse().map_err(|_| {
+                    polybot_common::errors::PolybotError::Config(
+                        "invalid decimal for min_usdc_balance".to_string(),
+                    )
+                })?
+            }
+            "max_consecutive_losses" => {
+                risk.max_consecutive_losses = value.parse().map_err(|_| {
+                    polybot_common::errors::PolybotError::Config(
+                        "invalid integer for max_consecutive_losses".to_string(),
+                    )
+                })?
+            }
+            "loss_cooldown_secs" => {
+                risk.loss_cooldown_secs = value.parse().map_err(|_| {
+                    polybot_common::errors::PolybotError::Config(
+                        "invalid integer for loss_cooldown_secs".to_string(),
+                    )
+                })?
+            }
             other => {
                 return Err(polybot_common::errors::PolybotError::Config(format!(
                     "unsupported runtime config key: {}",
@@ -758,21 +866,24 @@ pub async fn run_risk_engine(
 ) -> Result<(), polybot_common::errors::PolybotError> {
     while let Some(event) = receiver.recv().await {
         metrics.record_signal_received();
-        metrics.broadcast_event("signal_received", serde_json::json!({
-            "signal_id": &event.signal.signal_id,
-            "wallet": &event.signal.wallet_address,
-            "market_id": &event.signal.market_id,
-            "confidence": event.signal.confidence,
-            "side": format!("{:?}", event.signal.side),
-        }));
+        metrics.broadcast_event(
+            "signal_received",
+            serde_json::json!({
+                "signal_id": &event.signal.signal_id,
+                "wallet": &event.signal.wallet_address,
+                "market_id": &event.signal.market_id,
+                "confidence": event.signal.confidence,
+                "side": format!("{:?}", event.signal.side),
+            }),
+        );
         let decision = engine.evaluate(&event.signal).await;
 
         if matches!(decision.decision, Decision::Execute) {
             metrics.record_signal_processed();
         }
 
-        let sqlite_path = std::env::var("POLYBOT_SQLITE_PATH")
-            .unwrap_or_else(|_| "./polybot.db".to_string());
+        let sqlite_path =
+            std::env::var("POLYBOT_SQLITE_PATH").unwrap_or_else(|_| "./polybot.db".to_string());
         if let Ok(store) = SqliteStore::open(std::path::Path::new(&sqlite_path)) {
             let disposition = match &decision.decision {
                 Decision::Execute => "execute".to_string(),
@@ -816,12 +927,7 @@ pub async fn run_risk_engine(
                 polybot_common::types::Side::Yes => "YES",
                 polybot_common::types::Side::No => "NO",
             };
-            if let Err(e) = store.insert_signal(
-                &event.signal,
-                signal_source,
-                outcome,
-                status,
-            ) {
+            if let Err(e) = store.insert_signal(&event.signal, signal_source, outcome, status) {
                 tracing::error!(error = %e, "Failed to persist signal to PRD signals table");
             }
         }
@@ -834,12 +940,15 @@ pub async fn run_risk_engine(
             manual_review = decision.manual_review,
             "Risk decision made"
         );
-        metrics.broadcast_event("risk_decision", serde_json::json!({
-            "signal_id": &decision.signal_id,
-            "decision": format!("{:?}", decision.decision),
-            "size": decision.position_size_usd.to_string(),
-            "blocked": decision.blocked,
-        }));
+        metrics.broadcast_event(
+            "risk_decision",
+            serde_json::json!({
+                "signal_id": &decision.signal_id,
+                "decision": format!("{:?}", decision.decision),
+                "size": decision.position_size_usd.to_string(),
+                "blocked": decision.blocked,
+            }),
+        );
 
         if sender.send(decision).await.is_err() {
             tracing::error!("Execution channel closed");
@@ -910,10 +1019,8 @@ mod tests {
 
     #[tokio::test]
     async fn sell_signal_without_matching_copied_lot_is_skipped() {
-        let sqlite_path = std::env::temp_dir().join(format!(
-            "polybot-risk-{}.db",
-            uuid::Uuid::new_v4()
-        ));
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-risk-{}.db", uuid::Uuid::new_v4()));
         let _store = SqliteStore::open(&sqlite_path).unwrap();
         std::env::set_var("POLYBOT_SQLITE_PATH", &sqlite_path);
 
@@ -937,10 +1044,8 @@ mod tests {
 
     #[tokio::test]
     async fn sell_signal_skips_when_remaining_position_lookup_is_unavailable() {
-        let sqlite_path = std::env::temp_dir().join(format!(
-            "polybot-risk-{}.db",
-            uuid::Uuid::new_v4()
-        ));
+        let sqlite_path =
+            std::env::temp_dir().join(format!("polybot-risk-{}.db", uuid::Uuid::new_v4()));
         let store = SqliteStore::open(&sqlite_path).unwrap();
         std::env::set_var("POLYBOT_SQLITE_PATH", &sqlite_path);
 

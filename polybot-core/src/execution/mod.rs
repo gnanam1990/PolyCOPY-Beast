@@ -5,7 +5,11 @@ pub mod rate_limiter;
 pub mod retry;
 pub mod transport;
 pub mod v2_client;
+pub mod v2_flow;
+pub mod v2_order;
+pub mod v2_relayer;
 pub mod v2_signing;
+pub mod v2_sim;
 
 use polybot_common::constants::MIN_POSITION_USDC;
 use polybot_common::errors::PolybotError;
@@ -23,15 +27,17 @@ use crate::risk::limits;
 use crate::telegram_bot::alerts::AlertBroadcaster;
 use transport::select_transport_mode;
 
-pub async fn cancel_open_orders_on_shutdown(
-    config: Arc<AppConfig>,
-) -> Result<(), PolybotError> {
+pub async fn cancel_open_orders_on_shutdown(config: Arc<AppConfig>) -> Result<(), PolybotError> {
     if !config.system.execution_mode.allows_live_order_submission() {
         return Ok(());
     }
 
     let client = clob_client::ClobClient::from_env()?;
     client.cancel_all_orders().await
+}
+
+fn simulation_transaction_id(signal_id: &str) -> String {
+    format!("sim-{}", signal_id)
 }
 
 pub async fn run_execution_engine(
@@ -139,7 +145,9 @@ pub async fn run_execution_engine(
                             }
 
                             let cached_book = if let Some(ws_manager) = ws_manager.as_ref() {
-                                ws_manager.get_cached_orderbook(&market_context.token_id).await
+                                ws_manager
+                                    .get_cached_orderbook(&market_context.token_id)
+                                    .await
                             } else {
                                 None
                             };
@@ -147,7 +155,10 @@ pub async fn run_execution_engine(
                             let book = match cached_book {
                                 Some(book) => book,
                                 None => {
-                                    match market_data_client.get_orderbook(&market_context.token_id).await {
+                                    match market_data_client
+                                        .get_orderbook(&market_context.token_id)
+                                        .await
+                                    {
                                         Ok(book) => book,
                                         Err(e) => {
                                             metrics.record_trade_failed();
@@ -169,12 +180,14 @@ pub async fn run_execution_engine(
                                 }
                             };
 
-                            let (midpoint, has_real_price) = match clob_client::ClobClient::calculate_midpoint(&book) {
-                                Some(mp) => (mp, true),
-                                None => (target_price, false),
-                            };
+                            let (midpoint, has_real_price) =
+                                match clob_client::ClobClient::calculate_midpoint(&book) {
+                                    Some(mp) => (mp, true),
+                                    None => (target_price, false),
+                                };
                             let estimated_fill =
-                                clob_client::ClobClient::estimate_fill_price(&book).unwrap_or(midpoint);
+                                clob_client::ClobClient::estimate_fill_price(&book)
+                                    .unwrap_or(midpoint);
                             if has_real_price {
                                 market_prices
                                     .write()
@@ -266,15 +279,32 @@ pub async fn run_execution_engine(
                             signal_id = %decision.signal_id,
                             "Simulation mode: creating simulated trade"
                         );
-                        let trade = order_builder::create_simulated_trade(&decision, &order);
+                        let outcome = v2_flow::simulate_with_relayer(
+                            &order,
+                            v2_sim::SimulatedRelayer::success(simulation_transaction_id(
+                                &decision.signal_id,
+                            )),
+                        )?;
+                        let trade = outcome.trade;
+                        metrics.broadcast_event(
+                            "relayer_update",
+                            serde_json::json!({
+                                "transaction_id": outcome.transaction.transaction_id,
+                                "state": outcome.transaction.state.as_sqlite_str(),
+                                "mode": "simulation",
+                            }),
+                        );
                         metrics.record_trade(true);
-                        metrics.broadcast_event("trade_placed", serde_json::json!({
-                            "signal_id": &decision.signal_id,
-                            "market_id": &decision.market_id,
-                            "size_usd": trade.size_usd.to_string(),
-                            "price": trade.price.to_string(),
-                            "mode": "simulation",
-                        }));
+                        metrics.broadcast_event(
+                            "trade_placed",
+                            serde_json::json!({
+                                "signal_id": &decision.signal_id,
+                                "market_id": &decision.market_id,
+                                "size_usd": trade.size_usd.to_string(),
+                                "price": trade.price.to_string(),
+                                "mode": "simulation",
+                            }),
+                        );
                         if let Some(alerts) = &alerts {
                             alerts.info(format!(
                                 "Trade executed in simulation: signal={} market={} size_usd={} price={}",
@@ -439,8 +469,15 @@ mod tests {
     #[tokio::test]
     async fn shutdown_cancel_skips_non_live_mode() {
         let config = crate::config::AppConfig::default();
-        assert!(super::cancel_open_orders_on_shutdown(std::sync::Arc::new(config))
-            .await
-            .is_ok());
+        assert!(
+            super::cancel_open_orders_on_shutdown(std::sync::Arc::new(config))
+                .await
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn simulation_transaction_id_is_stable_for_signal() {
+        assert_eq!(super::simulation_transaction_id("abc"), "sim-abc");
     }
 }

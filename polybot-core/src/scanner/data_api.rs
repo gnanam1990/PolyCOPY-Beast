@@ -11,7 +11,7 @@ use crate::metrics::Metrics;
 use crate::risk::RiskEngine;
 
 use super::schema::normalize_data_api_trade;
-use super::wallet_tracker::{WalletActivityState, WalletPollTrigger, category_allowed};
+use super::wallet_tracker::{category_allowed, WalletActivityState, WalletPollTrigger};
 
 pub struct DataApiPoller {
     client: reqwest::Client,
@@ -24,15 +24,25 @@ pub struct DataApiPoller {
 }
 
 impl DataApiPoller {
-    pub fn new(config: &AppConfig, state: Arc<RwLock<WalletActivityState>>, metrics: Arc<Metrics>) -> Result<Self, PolybotError> {
+    pub fn new(
+        config: &AppConfig,
+        state: Arc<RwLock<WalletActivityState>>,
+        metrics: Arc<Metrics>,
+    ) -> Result<Self, PolybotError> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
-            .map_err(|e| PolybotError::Scanner(format!("Failed to build Data API client: {}", e)))?;
+            .map_err(|e| {
+                PolybotError::Scanner(format!("Failed to build Data API client: {}", e))
+            })?;
 
         Ok(Self {
             client,
-            base_url: config.scanner.data_api_url.trim_end_matches('/').to_string(),
+            base_url: config
+                .scanner
+                .data_api_url
+                .trim_end_matches('/')
+                .to_string(),
             poll_interval_ms: config.scanner.poll_interval_ms,
             signal_max_age_secs: config.scanner.signal_max_age_secs,
             allowed_categories: config.scanner.target_categories.clone(),
@@ -92,7 +102,9 @@ impl DataApiPoller {
             .query(&query)
             .send()
             .await
-            .map_err(|e| PolybotError::Scanner(format!("Data API activity request failed: {}", e)))?;
+            .map_err(|e| {
+                PolybotError::Scanner(format!("Data API activity request failed: {}", e))
+            })?;
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
         if let Some(ref metrics) = self.metrics {
@@ -106,10 +118,9 @@ impl DataApiPoller {
             )));
         }
 
-        let payload: Value = response
-            .json()
-            .await
-            .map_err(|e| PolybotError::Scanner(format!("Invalid Data API activity response: {}", e)))?;
+        let payload: Value = response.json().await.map_err(|e| {
+            PolybotError::Scanner(format!("Invalid Data API activity response: {}", e))
+        })?;
 
         let activities = extract_activity_items(payload);
         let mut max_seen = last_seen.unwrap_or_default();
@@ -117,7 +128,11 @@ impl DataApiPoller {
         for activity in activities {
             let activity_timestamp = activity
                 .get("timestamp")
-                .and_then(|value| value.as_i64().or_else(|| value.as_str().and_then(|s| s.parse::<i64>().ok())))
+                .and_then(|value| {
+                    value
+                        .as_i64()
+                        .or_else(|| value.as_str().and_then(|s| s.parse::<i64>().ok()))
+                })
                 .unwrap_or_default();
             max_seen = max_seen.max(activity_timestamp);
 
@@ -133,7 +148,10 @@ impl DataApiPoller {
                 continue;
             }
 
-            if signal.validate_with_max_age_secs(self.signal_max_age_secs as i64).is_err() {
+            if signal
+                .validate_with_max_age_secs(self.signal_max_age_secs as i64)
+                .is_err()
+            {
                 continue;
             }
 
@@ -155,7 +173,10 @@ impl DataApiPoller {
         }
 
         if max_seen > 0 {
-            self.state.write().await.record_activity(wallet, None, max_seen);
+            self.state
+                .write()
+                .await
+                .record_activity(wallet, None, max_seen);
         }
 
         Ok(())

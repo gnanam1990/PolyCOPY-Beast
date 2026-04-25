@@ -814,7 +814,11 @@ mod tests {
 
     #[test]
     fn fee_schedule_converts_bps_hundredths_to_bps() {
-        let fs = FeeSchedule { taker_fee_bps: 12500, maker_fee_bps: 0, rebate_bps: 2500 };
+        let fs = FeeSchedule {
+            taker_fee_bps: 12500,
+            maker_fee_bps: 0,
+            rebate_bps: 2500,
+        };
         assert_eq!(fs.taker_bps_true(), 125);
         assert_eq!(fs.maker_bps_true(), 0);
         assert_eq!(fs.rebate_bps_true(), 25);
@@ -822,7 +826,11 @@ mod tests {
 
     #[test]
     fn fee_schedule_serializes_with_camel_case_keys() {
-        let fs = FeeSchedule { taker_fee_bps: 500, maker_fee_bps: 0, rebate_bps: 100 };
+        let fs = FeeSchedule {
+            taker_fee_bps: 500,
+            maker_fee_bps: 0,
+            rebate_bps: 100,
+        };
         let s = serde_json::to_string(&fs).unwrap();
         assert!(s.contains("\"takerFee\":500"), "got: {}", s);
         assert!(s.contains("\"makerFee\":0"), "got: {}", s);

@@ -39,7 +39,9 @@ impl RelayerClient {
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
             .build()
-            .map_err(|e| PolybotError::Execution(format!("Failed to create relayer HTTP client: {}", e)))?;
+            .map_err(|e| {
+                PolybotError::Execution(format!("Failed to create relayer HTTP client: {}", e))
+            })?;
 
         Ok(Self {
             base_url: config.url.trim_end_matches('/').to_string(),
@@ -64,7 +66,9 @@ impl RelayerClient {
             .json(&RelayerSubmitRequest { signed_order })
             .send()
             .await
-            .map_err(|e| PolybotError::Execution(format!("Relayer submit request failed: {}", e)))?;
+            .map_err(|e| {
+                PolybotError::Execution(format!("Relayer submit request failed: {}", e))
+            })?;
 
         if !response.status().is_success() {
             return Err(PolybotError::Execution(format!(
@@ -73,10 +77,9 @@ impl RelayerClient {
             )));
         }
 
-        response
-            .json::<RelayerSubmitResponse>()
-            .await
-            .map_err(|e| PolybotError::Execution(format!("Failed to parse relayer submit response: {}", e)))
+        response.json::<RelayerSubmitResponse>().await.map_err(|e| {
+            PolybotError::Execution(format!("Failed to parse relayer submit response: {}", e))
+        })
     }
 
     pub async fn get_transaction(
@@ -84,11 +87,16 @@ impl RelayerClient {
         transaction_id: &str,
     ) -> Result<RelayerTransactionResponse, PolybotError> {
         let response = self
-            .with_auth_headers(self.http_client.get(format!("{}/transaction", self.base_url)))
+            .with_auth_headers(
+                self.http_client
+                    .get(format!("{}/transaction", self.base_url)),
+            )
             .query(&[("transactionID", transaction_id)])
             .send()
             .await
-            .map_err(|e| PolybotError::Execution(format!("Relayer transaction poll failed: {}", e)))?;
+            .map_err(|e| {
+                PolybotError::Execution(format!("Relayer transaction poll failed: {}", e))
+            })?;
 
         if !response.status().is_success() {
             return Err(PolybotError::Execution(format!(
@@ -100,7 +108,12 @@ impl RelayerClient {
         response
             .json::<RelayerTransactionResponse>()
             .await
-            .map_err(|e| PolybotError::Execution(format!("Failed to parse relayer transaction response: {}", e)))
+            .map_err(|e| {
+                PolybotError::Execution(format!(
+                    "Failed to parse relayer transaction response: {}",
+                    e
+                ))
+            })
     }
 
     pub async fn poll_transaction_until_terminal(
@@ -144,7 +157,11 @@ pub fn map_transaction_state(raw: &str) -> Result<TransactionState, PolybotError
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{Json, Router, extract::{Query, State}, routing::{get, post}};
+    use axum::{
+        extract::{Query, State},
+        routing::{get, post},
+        Json, Router,
+    };
     use serde::Deserialize;
     use std::sync::{Arc, Mutex};
 
@@ -214,7 +231,9 @@ mod tests {
             .route("/order", post(submit_handler))
             .route("/transaction", get(transaction_handler))
             .with_state(state.clone());
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
@@ -233,8 +252,12 @@ mod tests {
     #[test]
     fn relayer_state_parses_terminal_and_non_terminal_values() {
         assert!(!map_transaction_state("STATE_NEW").unwrap().is_terminal());
-        assert!(!map_transaction_state("STATE_PENDING").unwrap().is_terminal());
-        assert!(map_transaction_state("STATE_SUCCESS").unwrap().is_terminal());
+        assert!(!map_transaction_state("STATE_PENDING")
+            .unwrap()
+            .is_terminal());
+        assert!(map_transaction_state("STATE_SUCCESS")
+            .unwrap()
+            .is_terminal());
         assert!(map_transaction_state("STATE_FAILED").unwrap().is_terminal());
     }
 
@@ -258,7 +281,10 @@ mod tests {
 
         assert_eq!(response.transaction_id, "txn_submit_1");
         assert_eq!(response.state, "STATE_NEW");
-        assert_eq!(state.api_key.lock().unwrap().as_deref(), Some("test-relayer-key"));
+        assert_eq!(
+            state.api_key.lock().unwrap().as_deref(),
+            Some("test-relayer-key")
+        );
         assert_eq!(
             state.api_key_address.lock().unwrap().as_deref(),
             Some("0xabc123abc123abc123abc123abc123abc123abc1")
@@ -274,8 +300,14 @@ mod tests {
         assert_eq!(response.transaction_id, "txn_abc123");
         assert_eq!(response.state, "STATE_PENDING");
         assert_eq!(response.transaction_hash.as_deref(), Some("0xdeadbeef"));
-        assert_eq!(state.transaction_id.lock().unwrap().as_deref(), Some("txn_abc123"));
-        assert_eq!(state.api_key.lock().unwrap().as_deref(), Some("test-relayer-key"));
+        assert_eq!(
+            state.transaction_id.lock().unwrap().as_deref(),
+            Some("txn_abc123")
+        );
+        assert_eq!(
+            state.api_key.lock().unwrap().as_deref(),
+            Some("test-relayer-key")
+        );
     }
 
     #[tokio::test]

@@ -1,4 +1,4 @@
-use alloy_sol_types::{SolStruct, eip712_domain, sol};
+use alloy_sol_types::{eip712_domain, sol, SolStruct};
 use polybot_common::errors::PolybotError;
 use polybot_common::types::TradeDirection;
 use polymarket_client_sdk::auth::Signer;
@@ -44,12 +44,10 @@ pub fn parse_builder_code(raw: &str) -> Result<[u8; 32], PolybotError> {
 
     let mut out = [0u8; 32];
     for (idx, chunk) in stripped.as_bytes().chunks_exact(2).enumerate() {
-        let hex = std::str::from_utf8(chunk).map_err(|e| {
-            PolybotError::Execution(format!("Invalid BUILDER_CODE UTF-8: {}", e))
-        })?;
-        out[idx] = u8::from_str_radix(hex, 16).map_err(|e| {
-            PolybotError::Execution(format!("Invalid BUILDER_CODE hex: {}", e))
-        })?;
+        let hex = std::str::from_utf8(chunk)
+            .map_err(|e| PolybotError::Execution(format!("Invalid BUILDER_CODE UTF-8: {}", e)))?;
+        out[idx] = u8::from_str_radix(hex, 16)
+            .map_err(|e| PolybotError::Execution(format!("Invalid BUILDER_CODE hex: {}", e)))?;
     }
 
     Ok(out)
@@ -141,9 +139,9 @@ pub async fn sign_v2_order_payload<S: Signer>(
     signer: &S,
     payload: &V2OrderPayload,
 ) -> Result<String, PolybotError> {
-    let chain_id = signer
-        .chain_id()
-        .ok_or_else(|| PolybotError::Execution("Missing signer chain id for V2 signing".to_string()))?;
+    let chain_id = signer.chain_id().ok_or_else(|| {
+        PolybotError::Execution("Missing signer chain id for V2 signing".to_string())
+    })?;
     let maker: Address = payload
         .maker
         .parse()

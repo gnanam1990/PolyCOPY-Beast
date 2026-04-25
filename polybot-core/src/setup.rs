@@ -18,12 +18,15 @@ impl StartupPreflightReport {
                 "mode={:?} wallet_mode={} approvals_ready={}",
                 self.execution_mode, wallet_mode, approvals_ready
             ),
-            _ => format!(
-                "mode={:?} simulation_preflight=true",
-                self.execution_mode
-            ),
+            _ => format!("mode={:?} simulation_preflight=true", self.execution_mode),
         }
     }
+}
+
+fn live_v2_enabled() -> bool {
+    std::env::var("POLYBOT_ENABLE_LIVE_V2")
+        .map(|value| value == "true" || value == "1")
+        .unwrap_or(false)
 }
 
 pub async fn run_startup_preflight(
@@ -35,6 +38,12 @@ pub async fn run_startup_preflight(
             wallet_mode: None,
             approvals_ready: None,
         });
+    }
+
+    if matches!(config.system.execution_mode, ExecutionMode::Live) && !live_v2_enabled() {
+        return Err(PolybotError::Config(
+            "Live CLOB V2 submission is disabled for the simulation-complete milestone. Set POLYBOT_ENABLE_LIVE_V2=true only after V2 endpoint verification, pUSD wrap/approve/redeem support, dashboard control auth, and full workspace tests are green.".to_string(),
+        ));
     }
 
     let mut report = StartupPreflightReport {
@@ -66,4 +75,53 @@ pub async fn run_startup_preflight(
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use serial_test::serial;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn new(key: &'static str) -> Self {
+            Self {
+                key,
+                original: std::env::var(key).ok(),
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.original.as_ref() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn live_v2_gate_defaults_to_disabled() {
+        let _guard = EnvVarGuard::new("POLYBOT_ENABLE_LIVE_V2");
+        std::env::remove_var("POLYBOT_ENABLE_LIVE_V2");
+        assert!(!super::live_v2_enabled());
+    }
+
+    #[test]
+    #[serial]
+    fn live_v2_gate_accepts_true() {
+        let _guard = EnvVarGuard::new("POLYBOT_ENABLE_LIVE_V2");
+        std::env::set_var("POLYBOT_ENABLE_LIVE_V2", "true");
+        assert!(super::live_v2_enabled());
+    }
+
+    #[test]
+    #[serial]
+    fn live_v2_gate_accepts_one() {
+        let _guard = EnvVarGuard::new("POLYBOT_ENABLE_LIVE_V2");
+        std::env::set_var("POLYBOT_ENABLE_LIVE_V2", "1");
+        assert!(super::live_v2_enabled());
+    }
+}

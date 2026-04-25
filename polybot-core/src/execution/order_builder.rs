@@ -27,7 +27,8 @@ pub fn build_order(
 ) -> Order {
     let order_type = select_order_type(decision);
     let price = align_to_tick_size(target_price, market_context.tick_size);
-    let (size, normalized_size_usd) = if let Some(target_size_tokens) = decision.target_size_tokens {
+    let (size, normalized_size_usd) = if let Some(target_size_tokens) = decision.target_size_tokens
+    {
         let size = target_size_tokens.round_dp(2).max(Decimal::ZERO);
         (size, (size * price).round_dp(2))
     } else {
@@ -120,6 +121,26 @@ fn select_order_type(decision: &RiskDecision) -> OrderType {
     }
 }
 
+pub fn select_v2_order_type(
+    decision: &RiskDecision,
+    fee_schedule: Option<FeeSchedule>,
+    fok_max_fee_bps: u32,
+) -> OrderType {
+    let Some(fee_schedule) = fee_schedule else {
+        return OrderType::Limit;
+    };
+
+    let combined = decision.confidence_multiplier * decision.secret_level_multiplier;
+    let fok_max_fee_centibps = fok_max_fee_bps.saturating_mul(100);
+    if combined >= rust_decimal_macros::dec!(1.5)
+        && fee_schedule.taker_fee_bps <= fok_max_fee_centibps
+    {
+        OrderType::Fok
+    } else {
+        OrderType::Limit
+    }
+}
+
 pub fn create_simulated_trade(decision: &RiskDecision, order: &Order) -> Trade {
     Trade {
         id: uuid::Uuid::new_v4().to_string(),
@@ -201,6 +222,57 @@ mod tests {
         let decision = test_decision(dec!(0.5), dec!(0.6)); // 0.3 combined
         let order = build_order(&decision, &test_market_context(), dec!(0.50), dec!(50));
         assert_eq!(order.order_type, OrderType::Limit);
+    }
+
+    #[test]
+    fn v2_routing_defaults_to_limit_when_fee_schedule_missing() {
+        let decision = test_decision(dec!(1.5), dec!(1.0));
+
+        let order_type = select_v2_order_type(&decision, None, 50);
+
+        assert_eq!(order_type, OrderType::Limit);
+    }
+
+    #[test]
+    fn v2_routing_allows_fok_under_fee_threshold() {
+        let decision = test_decision(dec!(1.5), dec!(1.0));
+        let fee_schedule = FeeSchedule {
+            taker_fee_bps: 2_000,
+            maker_fee_bps: 0,
+            rebate_bps: 0,
+        };
+
+        let order_type = select_v2_order_type(&decision, Some(fee_schedule), 50);
+
+        assert_eq!(order_type, OrderType::Fok);
+    }
+
+    #[test]
+    fn v2_routing_uses_limit_when_taker_fee_exceeds_threshold() {
+        let decision = test_decision(dec!(1.5), dec!(1.0));
+        let fee_schedule = FeeSchedule {
+            taker_fee_bps: 12_500,
+            maker_fee_bps: 0,
+            rebate_bps: 0,
+        };
+
+        let order_type = select_v2_order_type(&decision, Some(fee_schedule), 50);
+
+        assert_eq!(order_type, OrderType::Limit);
+    }
+
+    #[test]
+    fn v2_routing_rejects_fractional_bps_above_threshold() {
+        let decision = test_decision(dec!(1.5), dec!(1.0));
+        let fee_schedule = FeeSchedule {
+            taker_fee_bps: 5_001,
+            maker_fee_bps: 0,
+            rebate_bps: 0,
+        };
+
+        let order_type = select_v2_order_type(&decision, Some(fee_schedule), 50);
+
+        assert_eq!(order_type, OrderType::Limit);
     }
 
     #[test]
@@ -323,8 +395,7 @@ mod tests {
 
     #[test]
     fn buy_fok_plan_applies_upward_price_buffer() {
-        let decision =
-            test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Buy);
+        let decision = test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Buy);
         let ctx = test_market_context();
         let order = build_order_with_price_buffer(
             &decision,
@@ -340,8 +411,7 @@ mod tests {
 
     #[test]
     fn sell_fok_plan_applies_reverse_price_buffer() {
-        let decision =
-            test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Sell);
+        let decision = test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Sell);
         let ctx = test_market_context();
         let order = build_order_with_price_buffer(
             &decision,
@@ -358,13 +428,11 @@ mod tests {
     #[test]
     fn build_order_propagates_direction() {
         let ctx = test_market_context();
-        let buy =
-            test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Buy);
+        let buy = test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Buy);
         let buy_order = build_order(&buy, &ctx, dec!(0.50), dec!(50));
         assert_eq!(buy_order.direction, TradeDirection::Buy);
 
-        let sell =
-            test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Sell);
+        let sell = test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Sell);
         let sell_order = build_order(&sell, &ctx, dec!(0.50), dec!(50));
         assert_eq!(sell_order.direction, TradeDirection::Sell);
     }
@@ -372,8 +440,7 @@ mod tests {
     #[test]
     fn simulated_trade_carries_direction() {
         let ctx = test_market_context();
-        let decision =
-            test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Sell);
+        let decision = test_decision_with_direction(dec!(1.0), dec!(1.0), TradeDirection::Sell);
         let order = build_order(&decision, &ctx, dec!(0.50), dec!(50));
         let trade = create_simulated_trade(&decision, &order);
         assert_eq!(trade.direction, TradeDirection::Sell);
