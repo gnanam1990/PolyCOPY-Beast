@@ -22,6 +22,7 @@
         --green: #65ff57;
         --shadow: 0 24px 90px rgba(0, 0, 0, 0.58);
         --radius: 18px;
+        --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
         --font-display: "Bahnschrift", "Rajdhani", "Agency FB", "Segoe UI", sans-serif;
         --font-body: "Aptos", "Segoe UI", sans-serif;
         --font-mono: "Cascadia Mono", "Consolas", monospace;
@@ -48,6 +49,7 @@
           var(--bg);
         background-size: auto, auto, 44px 44px, 44px 44px, auto;
         overflow-x: hidden;
+        animation: grid-drift 18s linear infinite;
       }
 
       body::before {
@@ -59,6 +61,27 @@
           linear-gradient(90deg, rgba(140, 255, 20, 0.03), transparent 18%, transparent 82%, rgba(22, 231, 255, 0.03)),
           radial-gradient(circle at center, transparent 0, rgba(0, 0, 0, 0.45) 78%);
         z-index: -1;
+      }
+
+      body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background:
+          repeating-linear-gradient(
+            0deg,
+            rgba(255, 255, 255, 0.025) 0,
+            rgba(255, 255, 255, 0.025) 1px,
+            transparent 1px,
+            transparent 5px
+          ),
+          linear-gradient(180deg, transparent 0%, rgba(22, 231, 255, 0.08) 48%, transparent 56%);
+        background-size: auto, 100% 280px;
+        mix-blend-mode: screen;
+        opacity: 0.28;
+        z-index: 3;
+        animation: scan-sweep 7s linear infinite;
       }
 
       button,
@@ -98,6 +121,7 @@
         border: 1px solid var(--line);
         border-radius: 16px;
         background: rgba(255, 255, 255, 0.025);
+        animation: boot-in 620ms var(--ease-out) both;
       }
 
       .brand-mark {
@@ -107,6 +131,7 @@
         border: 2px solid var(--lime);
         clip-path: polygon(28% 0, 92% 0, 60% 38%, 88% 38%, 32% 100%, 44% 55%, 10% 55%);
         filter: drop-shadow(0 0 16px rgba(140, 255, 20, 0.8));
+        animation: bolt-charge 2.8s ease-in-out infinite;
       }
 
       .brand h1 {
@@ -154,6 +179,7 @@
         text-decoration: none;
         border: 1px solid transparent;
         border-radius: 14px;
+        transition: transform 180ms var(--ease-out), border-color 180ms var(--ease-out), background 180ms var(--ease-out), box-shadow 180ms var(--ease-out);
       }
 
       .nav a.active,
@@ -162,6 +188,7 @@
         background: linear-gradient(90deg, rgba(140, 255, 20, 0.17), rgba(140, 255, 20, 0.03));
         border-color: rgba(140, 255, 20, 0.34);
         box-shadow: inset 3px 0 0 var(--lime), 0 0 28px rgba(140, 255, 20, 0.1);
+        transform: translateX(4px);
       }
 
       .nav-icon {
@@ -184,6 +211,7 @@
         border: 1px solid rgba(140, 255, 20, 0.25);
         border-radius: 16px;
         background: radial-gradient(circle at 90% 15%, rgba(140, 255, 20, 0.12), transparent 28%), rgba(5, 13, 15, 0.9);
+        animation: boot-in 680ms var(--ease-out) 120ms both;
       }
 
       .side-card strong {
@@ -205,6 +233,22 @@
       .content {
         min-width: 0;
         padding: 20px 22px 22px;
+        position: relative;
+      }
+
+      .content::before {
+        content: "";
+        position: fixed;
+        width: 420px;
+        height: 420px;
+        right: 8vw;
+        top: 12vh;
+        pointer-events: none;
+        background: radial-gradient(circle, rgba(22, 231, 255, 0.1), transparent 65%);
+        filter: blur(6px);
+        opacity: 0.75;
+        transform: translate3d(0, 0, 0);
+        animation: orb-float 9s ease-in-out infinite;
       }
 
       .topbar,
@@ -226,6 +270,7 @@
         gap: 14px;
         align-items: center;
         padding: 14px;
+        animation: boot-in 700ms var(--ease-out) 80ms both;
       }
 
       .badge {
@@ -242,6 +287,13 @@
         font-weight: 700;
         letter-spacing: 0.04em;
         text-transform: uppercase;
+        box-shadow: inset 0 0 20px rgba(22, 231, 255, 0.06);
+        transition: transform 180ms var(--ease-out), box-shadow 180ms var(--ease-out);
+      }
+
+      .badge:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 0 26px rgba(22, 231, 255, 0.12), inset 0 0 20px rgba(22, 231, 255, 0.08);
       }
 
       .badge.ready {
@@ -286,6 +338,7 @@
         border-radius: 99px;
         background: var(--lime);
         box-shadow: 0 0 18px currentColor;
+        animation: status-pulse 1.35s ease-in-out infinite;
       }
 
       .danger-btn {
@@ -300,6 +353,15 @@
         font-weight: 800;
         letter-spacing: 0.04em;
         text-transform: uppercase;
+        transition: transform 180ms var(--ease-out), box-shadow 180ms var(--ease-out), filter 180ms var(--ease-out);
+        animation: danger-breathe 2.2s ease-in-out infinite;
+      }
+
+      .danger-btn:hover,
+      .control-btn:hover,
+      .view-btn:hover {
+        transform: translateY(-2px);
+        filter: brightness(1.12);
       }
 
       .grid-stats {
@@ -312,6 +374,39 @@
       .card {
         position: relative;
         overflow: hidden;
+        transform: translateY(10px);
+        opacity: 0;
+        transition: transform 220ms var(--ease-out), border-color 220ms var(--ease-out), box-shadow 220ms var(--ease-out), background 220ms var(--ease-out);
+        animation: boot-in 720ms var(--ease-out) both;
+      }
+
+      .card > * {
+        position: relative;
+        z-index: 1;
+      }
+
+      .card::before {
+        content: "";
+        position: absolute;
+        inset: -1px;
+        pointer-events: none;
+        background:
+          radial-gradient(260px circle at var(--mx, 70%) var(--my, 12%), rgba(22, 231, 255, 0.16), transparent 44%),
+          linear-gradient(115deg, transparent 18%, rgba(255, 255, 255, 0.08) 38%, transparent 58%);
+        opacity: 0;
+        transform: translateX(-18%);
+        transition: opacity 180ms var(--ease-out), transform 420ms var(--ease-out);
+      }
+
+      .card:hover {
+        border-color: rgba(140, 255, 20, 0.34);
+        box-shadow: 0 30px 95px rgba(0, 0, 0, 0.68), 0 0 34px rgba(22, 231, 255, 0.08);
+        transform: translateY(-4px);
+      }
+
+      .card:hover::before {
+        opacity: 1;
+        transform: translateX(0);
       }
 
       .card::after {
@@ -322,6 +417,18 @@
         background: linear-gradient(135deg, rgba(255, 255, 255, 0.07), transparent 32%);
         opacity: 0.55;
       }
+
+      .grid-stats .card:nth-child(1) { animation-delay: 120ms; }
+      .grid-stats .card:nth-child(2) { animation-delay: 180ms; }
+      .grid-stats .card:nth-child(3) { animation-delay: 240ms; }
+      .grid-stats .card:nth-child(4) { animation-delay: 300ms; }
+      .grid-stats .card:nth-child(5) { animation-delay: 360ms; }
+      .main-grid .card:nth-child(1) { animation-delay: 420ms; }
+      .main-grid .card:nth-child(2) { animation-delay: 500ms; }
+      .tables .card:nth-child(1) { animation-delay: 560ms; }
+      .tables .card:nth-child(2) { animation-delay: 620ms; }
+      .tables .card:nth-child(3) { animation-delay: 680ms; }
+      .tables .card:nth-child(4) { animation-delay: 740ms; }
 
       .stat {
         min-height: 132px;
@@ -360,6 +467,8 @@
         font-size: clamp(2rem, 3vw, 2.65rem);
         line-height: 1;
         letter-spacing: 0.02em;
+        text-shadow: 0 0 24px rgba(140, 255, 20, 0.08);
+        transition: color 200ms var(--ease-out), text-shadow 200ms var(--ease-out), transform 200ms var(--ease-out);
       }
 
       .sub {
@@ -390,6 +499,23 @@
       .spark svg {
         width: 100%;
         height: 100%;
+      }
+
+      .spark polyline,
+      .chart-line polyline {
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-dasharray: 540;
+        stroke-dashoffset: 540;
+        animation: line-draw 1.35s var(--ease-out) 650ms forwards, line-glow 2.6s ease-in-out 1.9s infinite;
+        filter: drop-shadow(0 0 7px rgba(140, 255, 20, 0.6));
+      }
+
+      .chart-line polygon {
+        opacity: 0.82;
+        transform-origin: bottom;
+        animation: area-breathe 3.4s ease-in-out infinite;
+        transition: all 440ms var(--ease-out);
       }
 
       .main-grid {
@@ -432,11 +558,17 @@
         color: var(--muted);
         font-family: var(--font-mono);
         font-size: 0.76rem;
+        transition: color 160ms var(--ease-out), background 160ms var(--ease-out), transform 160ms var(--ease-out);
       }
 
       .tabs .active {
         color: var(--lime);
         background: rgba(140, 255, 20, 0.14);
+      }
+
+      .tabs span:hover {
+        color: var(--cyan);
+        transform: translateY(-1px);
       }
 
       .pulse-body {
@@ -460,6 +592,12 @@
         min-height: 104px;
         padding: 16px;
         border-right: 1px solid rgba(255, 255, 255, 0.08);
+        transition: background 180ms var(--ease-out), transform 180ms var(--ease-out);
+      }
+
+      .metric:hover {
+        background: rgba(140, 255, 20, 0.035);
+        transform: translateY(-2px);
       }
 
       .metric:last-child {
@@ -520,6 +658,17 @@
           linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
           linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
         background-size: 24px 24px;
+        overflow: hidden;
+        animation: chart-grid 1.8s linear infinite;
+      }
+
+      .chart-box::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(90deg, transparent, rgba(140, 255, 20, 0.1), transparent);
+        transform: translateX(-100%);
+        animation: chart-scan 3.4s ease-in-out infinite;
       }
 
       .chart-line {
@@ -546,6 +695,18 @@
         border-radius: 999px;
         background: conic-gradient(var(--green) var(--success-deg, 360deg), rgba(255, 255, 255, 0.08) 0);
         box-shadow: 0 0 34px rgba(101, 255, 87, 0.16);
+        position: relative;
+        transition: background 520ms var(--ease-out), transform 220ms var(--ease-out);
+        animation: gauge-breathe 2.6s ease-in-out infinite;
+      }
+
+      .ring::before {
+        content: "";
+        position: absolute;
+        inset: -6px;
+        border-radius: inherit;
+        border: 1px solid rgba(101, 255, 87, 0.2);
+        animation: ring-radar 1.9s ease-out infinite;
       }
 
       .ring-inner {
@@ -568,6 +729,13 @@
       .mini-card {
         min-height: 94px;
         padding: 14px;
+        transition: transform 180ms var(--ease-out), border-color 180ms var(--ease-out), background 180ms var(--ease-out);
+      }
+
+      .mini-card:hover {
+        transform: translateY(-2px);
+        border-color: rgba(22, 231, 255, 0.24);
+        background: rgba(22, 231, 255, 0.035);
       }
 
       .mini-line {
@@ -584,6 +752,7 @@
         font-family: var(--font-mono);
         font-size: 0.78rem;
         text-transform: uppercase;
+        text-shadow: 0 0 12px rgba(140, 255, 20, 0.4);
       }
 
       .controls-card {
@@ -608,18 +777,21 @@
         font-weight: 800;
         letter-spacing: 0.06em;
         text-transform: uppercase;
+        transition: transform 180ms var(--ease-out), filter 180ms var(--ease-out), box-shadow 180ms var(--ease-out), border-color 180ms var(--ease-out);
       }
 
       .control-btn.resume {
         border-color: rgba(22, 231, 255, 0.48);
         color: #9cf7ff;
         background: rgba(22, 231, 255, 0.08);
+        box-shadow: 0 0 22px rgba(22, 231, 255, 0.08);
       }
 
       .control-btn.stop {
         border-color: rgba(255, 77, 55, 0.65);
         color: #ff6d5d;
         background: rgba(255, 77, 55, 0.1);
+        animation: danger-breathe 2.4s ease-in-out infinite;
       }
 
       .control-btn small {
@@ -662,6 +834,7 @@
         min-height: 22px;
         color: var(--muted);
         font-weight: 700;
+        transition: color 180ms var(--ease-out), transform 180ms var(--ease-out);
       }
 
       .toast.ok {
@@ -697,6 +870,7 @@
         text-align: center;
         font-family: var(--font-mono);
         background: rgba(140, 255, 20, 0.08);
+        transition: transform 180ms var(--ease-out), box-shadow 180ms var(--ease-out);
       }
 
       .table-wrap {
@@ -716,6 +890,14 @@
         border-bottom: 1px solid rgba(255, 255, 255, 0.06);
         text-align: left;
         white-space: nowrap;
+      }
+
+      tbody tr {
+        animation: row-in 360ms var(--ease-out) both;
+      }
+
+      tbody tr:hover {
+        background: rgba(22, 231, 255, 0.045);
       }
 
       td {
@@ -740,6 +922,7 @@
         margin: 0 auto 12px;
         border: 1px solid rgba(255, 255, 255, 0.16);
         border-radius: 999px;
+        animation: target-spin 5s linear infinite;
       }
 
       .target::before,
@@ -788,6 +971,7 @@
         font-weight: 800;
         letter-spacing: 0.04em;
         text-transform: uppercase;
+        transition: transform 180ms var(--ease-out), filter 180ms var(--ease-out), box-shadow 180ms var(--ease-out);
       }
 
       .status-rail {
@@ -796,6 +980,7 @@
         gap: 0;
         margin-top: 16px;
         overflow: hidden;
+        animation: boot-in 700ms var(--ease-out) 820ms both;
       }
 
       .rail-item {
@@ -830,6 +1015,122 @@
 
       .rail-icon.green {
         color: var(--lime);
+      }
+
+      .value-updated {
+        color: #ffffff !important;
+        text-shadow: 0 0 22px rgba(140, 255, 20, 0.72), 0 0 42px rgba(22, 231, 255, 0.22);
+        transform: translateY(-1px) scale(1.015);
+        animation: value-flash 720ms var(--ease-out) both;
+      }
+
+      .refreshing .topbar {
+        border-color: rgba(22, 231, 255, 0.38);
+        box-shadow: var(--shadow), 0 0 28px rgba(22, 231, 255, 0.1);
+      }
+
+      @keyframes boot-in {
+        from {
+          opacity: 0;
+          transform: translateY(18px) scale(0.985);
+          filter: blur(8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+          filter: blur(0);
+        }
+      }
+
+      @keyframes grid-drift {
+        from { background-position: 0 0, 0 0, 0 0, 0 0, 0 0; }
+        to { background-position: 0 0, 0 0, 44px 44px, -44px 44px, 0 0; }
+      }
+
+      @keyframes scan-sweep {
+        from { background-position: 0 0, 0 -280px; }
+        to { background-position: 0 0, 0 100vh; }
+      }
+
+      @keyframes orb-float {
+        0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.55; }
+        50% { transform: translate3d(-52px, 36px, 0) scale(1.12); opacity: 0.88; }
+      }
+
+      @keyframes bolt-charge {
+        0%, 100% { filter: drop-shadow(0 0 10px rgba(140, 255, 20, 0.58)); transform: scale(1); }
+        45% { filter: drop-shadow(0 0 28px rgba(140, 255, 20, 1)); transform: scale(1.045); }
+      }
+
+      @keyframes status-pulse {
+        0%, 100% { opacity: 0.78; box-shadow: 0 0 12px currentColor; }
+        50% { opacity: 1; box-shadow: 0 0 24px currentColor, 0 0 42px currentColor; }
+      }
+
+      @keyframes danger-breathe {
+        0%, 100% { box-shadow: 0 0 24px rgba(255, 77, 55, 0.12); }
+        50% { box-shadow: 0 0 38px rgba(255, 77, 55, 0.28); }
+      }
+
+      @keyframes line-draw {
+        to { stroke-dashoffset: 0; }
+      }
+
+      @keyframes line-glow {
+        0%, 100% { filter: drop-shadow(0 0 5px rgba(140, 255, 20, 0.48)); }
+        50% { filter: drop-shadow(0 0 13px rgba(140, 255, 20, 0.88)); }
+      }
+
+      @keyframes area-breathe {
+        0%, 100% { opacity: 0.56; transform: scaleY(0.96); }
+        50% { opacity: 0.86; transform: scaleY(1); }
+      }
+
+      @keyframes chart-grid {
+        from { background-position: 0 0, 0 0; }
+        to { background-position: 0 24px, 24px 0; }
+      }
+
+      @keyframes chart-scan {
+        0% { transform: translateX(-120%); opacity: 0; }
+        30% { opacity: 1; }
+        70% { opacity: 1; }
+        100% { transform: translateX(120%); opacity: 0; }
+      }
+
+      @keyframes gauge-breathe {
+        0%, 100% { transform: scale(1); box-shadow: 0 0 28px rgba(101, 255, 87, 0.13); }
+        50% { transform: scale(1.025); box-shadow: 0 0 42px rgba(101, 255, 87, 0.24); }
+      }
+
+      @keyframes ring-radar {
+        from { opacity: 0.8; transform: scale(0.92); }
+        to { opacity: 0; transform: scale(1.22); }
+      }
+
+      @keyframes target-spin {
+        to { transform: rotate(360deg); }
+      }
+
+      @keyframes row-in {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      @keyframes value-flash {
+        0% { filter: brightness(1.9); }
+        100% { filter: brightness(1); }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.001ms !important;
+          animation-iteration-count: 1 !important;
+          scroll-behavior: auto !important;
+          transition-duration: 0.001ms !important;
+        }
       }
 
       @media (max-width: 1280px) {
@@ -1149,6 +1450,9 @@
     <script>
       const CONTROL_KEY_STORAGE = "polybot_control_key";
       const CONTROL_KEY_HEADER = "X-PolyBot-Control-Key";
+      const latencyTrace = Array.from({ length: 22 }, function(_, index) {
+        return 22 + Math.sin(index / 1.7) * 8 + (index % 4) * 2;
+      });
 
       function byId(id) {
         return document.getElementById(id);
@@ -1156,7 +1460,23 @@
 
       function setText(id, value) {
         const el = byId(id);
-        if (el) el.textContent = value;
+        if (!el) return;
+        const next = String(value);
+        const changed = el.textContent !== next;
+        el.textContent = next;
+        if (changed && shouldFlash(el)) {
+          el.classList.remove("value-updated");
+          void el.offsetWidth;
+          el.classList.add("value-updated");
+        }
+      }
+
+      function shouldFlash(el) {
+        return el.classList.contains("value")
+          || el.classList.contains("metric-number")
+          || el.classList.contains("count")
+          || el.id === "median-latency-value"
+          || el.id === "success-rate-value";
       }
 
       function escapeHtml(value) {
@@ -1194,6 +1514,10 @@
         return Number.isFinite(parsed) ? parsed : 0;
       }
 
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+      }
+
       function money(value) {
         return "$" + num(value).toLocaleString(undefined, {
           minimumFractionDigits: 2,
@@ -1211,6 +1535,48 @@
 
       function emptyState(title, body) {
         return '<div class="empty"><div><div class="target"></div><strong>' + escapeHtml(title) + '</strong><span>' + escapeHtml(body) + '</span></div></div>';
+      }
+
+      function buildTracePoints(values, width, height, pad) {
+        const max = Math.max.apply(null, values.concat([1]));
+        const min = Math.min.apply(null, values.concat([0]));
+        const range = Math.max(max - min, 1);
+        return values.map(function(value, index) {
+          const x = (index / Math.max(values.length - 1, 1)) * width;
+          const y = pad + (1 - ((value - min) / range)) * (height - pad * 2);
+          return Math.round(x) + "," + Math.round(y);
+        }).join(" ");
+      }
+
+      function updateLatencyTrace(latencyMs) {
+        const safeLatency = clamp(Number(latencyMs) || 0, 0, 250);
+        const last = latencyTrace[latencyTrace.length - 1] || safeLatency;
+        const blended = last * 0.55 + safeLatency * 0.45;
+        latencyTrace.push(blended);
+        while (latencyTrace.length > 22) latencyTrace.shift();
+
+        const points = buildTracePoints(latencyTrace, 420, 120, 16);
+        const line = document.querySelector(".chart-line polyline");
+        const area = document.querySelector(".chart-line polygon");
+        if (line) {
+          line.setAttribute("points", points);
+          line.style.animation = "none";
+          void line.getBoundingClientRect();
+          line.style.animation = "line-draw 640ms var(--ease-out) forwards, line-glow 2.6s ease-in-out 700ms infinite";
+        }
+        if (area) {
+          area.setAttribute("points", points + " 420,120 0,120");
+        }
+      }
+
+      function bindPointerGlow() {
+        document.querySelectorAll(".card, .topbar").forEach(function(panel) {
+          panel.addEventListener("pointermove", function(event) {
+            const rect = panel.getBoundingClientRect();
+            panel.style.setProperty("--mx", Math.round(((event.clientX - rect.left) / rect.width) * 100) + "%");
+            panel.style.setProperty("--my", Math.round(((event.clientY - rect.top) / rect.height) * 100) + "%");
+          });
+        });
       }
 
       function renderTable(containerId, rows, headers, cells, emptyTitle, emptyBody) {
@@ -1278,6 +1644,7 @@
       }
 
       async function refresh() {
+        document.body.classList.add("refreshing");
         try {
           const health = await fetchJson("/health");
           const metricsText = await fetchText("/metrics");
@@ -1333,6 +1700,7 @@
           setText("failure-pct", attempts > 0 ? ((failures / attempts) * 100).toFixed(2) + "%" : "0.00%");
           setText("median-latency-value", avgLatencyMs + "ms");
           setText("p95-latency-value", "P95 " + maxLatencyMs + "ms");
+          updateLatencyTrace(avgLatencyMs);
           setText("success-rate-value", Math.round(successRate * 100) + "%");
           setText("success-rate-count", "(" + successes + "/" + attempts + ")");
           byId("success-ring").style.setProperty("--success-deg", Math.round(successRate * 360) + "deg");
@@ -1416,6 +1784,10 @@
           );
         } catch (error) {
           setControlFeedback("Refresh failed: " + error.message, false);
+        } finally {
+          window.setTimeout(function() {
+            document.body.classList.remove("refreshing");
+          }, 260);
         }
       }
 
@@ -1453,6 +1825,10 @@
       byId("emergency-stop-button").addEventListener("click", emergencyStop);
       byId("top-emergency-button").addEventListener("click", emergencyStop);
 
+      bindPointerGlow();
+      requestAnimationFrame(function() {
+        document.body.classList.add("dashboard-ready");
+      });
       refresh();
       setInterval(refresh, 5000);
       setInterval(function() {
