@@ -73,6 +73,10 @@ pub async fn run_startup_preflight(
         ));
     }
 
+    if matches!(config.system.execution_mode, ExecutionMode::Live) {
+        crate::execution::live_v2_submission_config(config)?;
+    }
+
     let condition_id = v2_verification_condition_id().ok_or_else(|| {
         PolybotError::Config(
             "Live mode requires POLYBOT_V2_VERIFY_CONDITION_ID so setup-check can verify the real V2 market/fee response shape.".to_string(),
