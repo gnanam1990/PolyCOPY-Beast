@@ -6,6 +6,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use polybot_common::types::TransactionRecord;
 use serde::Serialize;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -42,6 +43,11 @@ pub struct SignalsQuery {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct TradesQuery {
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct TransactionsQuery {
     pub limit: Option<usize>,
 }
 
@@ -83,6 +89,11 @@ pub struct HealthResponse {
     pub last_signal_at: Option<String>,
     pub daily_pnl: String,
     pub balance_usd: String,
+    pub virtual_pusd: String,
+    pub reserved_pusd: String,
+    pub fees_paid: String,
+    pub rebates_earned: String,
+    pub live_disabled_reason: Option<String>,
     pub drawdown_pct: String,
     pub paused: bool,
     pub open_positions: u64,
@@ -153,6 +164,13 @@ pub async fn health_check(State(state): State<Arc<HealthState>>) -> Json<HealthR
         last_signal_at: last_signal,
         daily_pnl: format!("{:.2}", metrics.daily_pnl_usd()),
         balance_usd: format!("{:.2}", balance_usd),
+        virtual_pusd: format!("{:.2}", metrics.virtual_pusd()),
+        reserved_pusd: format!("{:.2}", metrics.reserved_pusd()),
+        fees_paid: format!("{:.2}", metrics.fees_paid()),
+        rebates_earned: format!("{:.2}", metrics.rebates_earned()),
+        live_disabled_reason: state
+            .simulation_mode
+            .then(|| "simulation-complete milestone keeps live submission disabled".to_string()),
         drawdown_pct: format!("{:.2}", drawdown_pct),
         paused,
         open_positions: metrics
@@ -376,6 +394,17 @@ pub async fn executions_handler(
     }
 }
 
+pub async fn transactions_handler(
+    State(state): State<Arc<HealthState>>,
+    Query(query): Query<TransactionsQuery>,
+) -> Json<Vec<TransactionRecord>> {
+    let limit = query.limit.unwrap_or(20);
+    match SqliteStore::open(std::path::Path::new(&state.sqlite_path)) {
+        Ok(store) => Json(store.latest_transactions(limit).unwrap_or_default()),
+        Err(_) => Json(Vec::new()),
+    }
+}
+
 pub async fn daily_stats_handler(
     State(state): State<Arc<HealthState>>,
     Query(query): Query<DailyStatsQuery>,
@@ -507,6 +536,7 @@ pub fn create_health_router(state: Arc<HealthState>) -> Router {
         .route("/positions", get(positions_handler))
         .route("/signals", get(signals_handler))
         .route("/executions", get(executions_handler))
+        .route("/transactions", get(transactions_handler))
         .route("/daily", get(daily_stats_handler))
         .route("/ws", get(ws_handler))
         .route("/control/pause", post(pause_handler))
@@ -581,6 +611,11 @@ mod tests {
 
         let response = health_check(State(state)).await.0;
         assert_eq!(response.balance_usd, "1000.00");
+        assert_eq!(response.virtual_pusd, "0.00");
+        assert_eq!(response.reserved_pusd, "0.00");
+        assert_eq!(response.fees_paid, "0.00");
+        assert_eq!(response.rebates_earned, "0.00");
+        assert!(response.live_disabled_reason.is_some());
         assert_eq!(response.drawdown_pct, "0.00");
 
         let _ = std::fs::remove_file(sqlite_path);
@@ -595,6 +630,7 @@ mod tests {
 
         let dbg = format!("{:?}", router);
         assert!(dbg.contains("/executions"));
+        assert!(dbg.contains("/transactions"));
         assert!(dbg.contains("/control/pause"));
         assert!(dbg.contains("/control/resume"));
         assert!(dbg.contains("/control/emergency-stop"));
@@ -603,6 +639,18 @@ mod tests {
         assert!(dbg.contains("/health/control/emergency-stop"));
 
         let _ = std::fs::remove_file(sqlite_path);
+    }
+
+    #[tokio::test]
+    async fn transactions_handler_returns_empty_vec_on_store_error() {
+        let state = test_health_state(std::env::temp_dir().to_string_lossy().to_string());
+
+        let response =
+            transactions_handler(State(state), Query(TransactionsQuery { limit: Some(5) }))
+                .await
+                .0;
+
+        assert!(response.is_empty());
     }
 
     #[tokio::test]
