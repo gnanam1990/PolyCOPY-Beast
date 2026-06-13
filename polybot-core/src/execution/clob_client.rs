@@ -1127,16 +1127,31 @@ impl ClobClient {
         market_id.starts_with("0x") && market_id.len() == 66
     }
 
+    /// Best bid = highest-priced buy order. Polymarket's `/book` endpoint
+    /// (and the WS book channel) returns bids sorted ascending by price, so the
+    /// best bid is the LAST element, not the first. To stay correct regardless
+    /// of source ordering we scan for the maximum bid price.
+    pub fn best_bid(book: &OrderBookSnapshot) -> Option<Decimal> {
+        book.bids
+            .iter()
+            .filter_map(|b| b.price.parse::<Decimal>().ok())
+            .max()
+    }
+
+    /// Best ask = lowest-priced sell order. Polymarket returns asks sorted
+    /// descending by price, so the best ask is the LAST element, not the first.
+    /// Scan for the minimum ask price to stay correct regardless of ordering.
+    pub fn best_ask(book: &OrderBookSnapshot) -> Option<Decimal> {
+        book.asks
+            .iter()
+            .filter_map(|a| a.price.parse::<Decimal>().ok())
+            .min()
+    }
+
     /// Calculate the midpoint price from an orderbook for slippage validation.
     pub fn calculate_midpoint(book: &OrderBookSnapshot) -> Option<Decimal> {
-        let best_bid = book
-            .bids
-            .first()
-            .and_then(|b| b.price.parse::<Decimal>().ok());
-        let best_ask = book
-            .asks
-            .first()
-            .and_then(|a| a.price.parse::<Decimal>().ok());
+        let best_bid = Self::best_bid(book);
+        let best_ask = Self::best_ask(book);
 
         match (best_bid, best_ask) {
             (Some(bid), Some(ask)) => Some((bid + ask) / dec!(2)),
@@ -1147,10 +1162,7 @@ impl ClobClient {
     }
 
     pub fn estimate_fill_price(book: &OrderBookSnapshot) -> Option<Decimal> {
-        book.asks
-            .first()
-            .and_then(|entry| entry.price.parse::<Decimal>().ok())
-            .or_else(|| Self::calculate_midpoint(book))
+        Self::best_ask(book).or_else(|| Self::calculate_midpoint(book))
     }
 
     pub fn visible_liquidity_usd(book: &OrderBookSnapshot) -> Decimal {
@@ -1318,6 +1330,53 @@ mod tests {
             timestamp: 0,
         };
 
+        assert_eq!(ClobClient::estimate_fill_price(&book), Some(dec!(0.62)));
+    }
+
+    #[test]
+    fn best_bid_ask_handle_polymarket_book_ordering() {
+        // Polymarket's /book returns bids ascending and asks descending by
+        // price, so the best bid and best ask are both the LAST element.
+        let book = OrderBookSnapshot {
+            market: "test".to_string(),
+            asset_id: "test-token".to_string(),
+            bids: vec![
+                OrderBookEntry {
+                    price: "0.55".to_string(),
+                    size: "100".to_string(),
+                },
+                OrderBookEntry {
+                    price: "0.58".to_string(),
+                    size: "100".to_string(),
+                },
+                OrderBookEntry {
+                    price: "0.60".to_string(), // best bid (highest), last
+                    size: "100".to_string(),
+                },
+            ],
+            asks: vec![
+                OrderBookEntry {
+                    price: "0.68".to_string(),
+                    size: "100".to_string(),
+                },
+                OrderBookEntry {
+                    price: "0.65".to_string(),
+                    size: "100".to_string(),
+                },
+                OrderBookEntry {
+                    price: "0.62".to_string(), // best ask (lowest), last
+                    size: "100".to_string(),
+                },
+            ],
+            hash: "abc".to_string(),
+            timestamp: 0,
+        };
+
+        assert_eq!(ClobClient::best_bid(&book), Some(dec!(0.60)));
+        assert_eq!(ClobClient::best_ask(&book), Some(dec!(0.62)));
+        // Midpoint must use best bid/ask, not worst-priced first entries.
+        assert_eq!(ClobClient::calculate_midpoint(&book), Some(dec!(0.61)));
+        // Estimated fill must be the best (lowest) ask a buyer would cross.
         assert_eq!(ClobClient::estimate_fill_price(&book), Some(dec!(0.62)));
     }
 
